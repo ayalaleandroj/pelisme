@@ -1,0 +1,106 @@
+/* ==========================================================================
+   Pelisme — styles Tailwind cannot express:
+   scrollbars, modal/dropdown transitions, safe-area padding, skeletons.
+   ========================================================================== */
+
+:root {
+  --accent: #e11d48;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* -------------------------------------------- safe-area aware fixed layout */
+.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Keep content clear of the fixed bottom nav (64px) + safe-area + breathing
+   room for the floating roulette button. */
+.main-content {
+  padding-bottom: calc(9rem + env(safe-area-inset-bottom));
+}
+
+/* Floating "¡Sorprendeme!" button sits just above the bottom nav. */
+.fab {
+  bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+/* ---------------------------------------------------------- modal behavior */
+body.modal-open {
+  overflow: hidden;
+}
+
+.modal-backdrop {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.modal-backdrop.modal-visible {
+  opacity: 1;
+}
+
+.modal-panel {
+  opacity: 0;
+  transform: translateY(24px) scale(0.98);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.modal-backdrop.modal-visible .modal-panel {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* ------------------------------------------------- search dropdown motion */
+.dropdown {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.dropdown.dropdown-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ------------------------------------------------------- skeleton shimmer */
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  background-color: #1e293b;
+  background-image: linear-gradient(
+    90deg,
+    rgba(30, 41, 59, 0) 0%,
+    rgba(51, 65, 85, 0.65) 50%,
+    rgba(30, 41, 59, 0) 100%
+  );
+  background-size: 400px 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------- card hover */
+.poster-card {
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.poster-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
