@@ -1,0 +1,20 @@
+{
+  "name": "Pelisme",
+  "short_name": "Pelisme",
+  "description": "Biblioteca personal de películas y series con motor de recomendación.",
+  "id": "./index.html",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

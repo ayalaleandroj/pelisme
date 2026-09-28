@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Dark rounded background -->
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+
+  <!-- Clapper stick (tilted, striped) -->
+  <g transform="rotate(-8 256 178)">
+    <clipPath id="stickClip">
+      <rect x="96" y="150" width="320" height="56" rx="10"/>
+    </clipPath>
+    <g clip-path="url(#stickClip)">
+      <rect x="96" y="150" width="320" height="56" fill="#f8fafc"/>
+      <g fill="#0f172a">
+        <rect x="104" y="128" width="26" height="100" transform="rotate(25 117 178)"/>
+        <rect x="184" y="128" width="26" height="100" transform="rotate(25 197 178)"/>
+        <rect x="264" y="128" width="26" height="100" transform="rotate(25 277 178)"/>
+        <rect x="344" y="128" width="26" height="100" transform="rotate(25 357 178)"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Clapperboard body -->
+  <rect x="96" y="224" width="320" height="176" rx="16" fill="#e50914"/>
+
+  <!-- Play glyph -->
+  <path d="M232 268 L232 356 L316 312 Z" fill="#f8fafc"/>
+</svg>
