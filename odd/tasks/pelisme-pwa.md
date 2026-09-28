@@ -27,21 +27,24 @@ All tasks: delegated direct (one writer). Trigger evidence: writer trigger — 1
 `ask-on-risk` (default). Forecast ~1200 authored lines across 6 work-unit commits. No PR requested; chain strategy deferred until the user asks for PRs.
 
 ## Tasks
-- [ ] T1 — DB schema: `supabase/schema.sql` with the user-provided SQL verbatim (3 tables + RLS policies). Check: readback matches spec.
-- [ ] T2 — PWA scaffold: `manifest.json` (standalone, dark), `sw.js` (cache app shell, stale-while-revalidate posters), `icons/icon.svg`, `.gitignore` (`.atl/`), `js/config.js` placeholders. Checks: JSON parses, `node --check sw.js`.
-- [ ] T3 — API clients: `js/tmdb.js` (search/multi, trending/all/day, movie+tv details with credits & videos, image helpers) and `js/supabaseClient.js` (client init, username→email auth, session, CRUD for the 3 tables, composite text ids `movie-550`). Check: `node --check`.
-- [ ] T4 — Match engine: `js/match.js`. Taste profile from `top_favorites` (weight 3) + `vistos` rating>=7 (weight rating/10): genres, directors, top-5 cast; TMDB-details cache in localStorage; score = affinity × quality(vote_average), shown as "NN% Match". Check: `node --check`.
-- [ ] T5 — App UI: `index.html`, `css/style.css`, `js/app.js`. Login screen; bottom nav with 5 tabs (Descubrir with debounced autocomplete search + trending grid + floating "¡Sorprendeme!"; Vistos with rating badges and "+1 Cap" optimistic increment for series; Watchlist with % Match and quick "mark as seen"; Mi Top; Recomendados sorted by match desc). Detail modal: poster, synopsis, genres, main cast, TMDB vote, YouTube trailer link, actions (Mi Top / Watchlist / Marcar como Vista with rating+review+season/episode form). Roulette: watchlist match>=80% → random; else recommendations from a random top favorite not in vistos, high match. Lazy images. Checks: `node --check`, readback of the 5 tabs and modal.
-- [ ] T6 — Verification pass: run all checks, fix anything, report.
+- [x] T1 — DB schema: `supabase/schema.sql` — commit `097cb48`
+- [x] T2 — PWA scaffold: `manifest.json`, `sw.js`, `icons/icon.svg`, `.gitignore`, `js/config.js` — commit `2c4b3ce`
+- [x] T3 — API clients: `js/tmdb.js`, `js/supabaseClient.js` — commit `0cc84ff`
+- [x] T4 — Match engine: `js/match.js` — commit `821503d`
+- [x] T5 — App UI: `index.html`, `css/style.css`, `js/app.js` — commit `73cde46`
+- [x] T6 — Verification pass — gate results below
 
 ## Acceptance criteria
 All listed files exist; every JS file passes `node --check`; `manifest.json` is valid JSON; SQL matches the provided schema; Spanish UI labels per spec; one Conventional Commit per task on `feat/pwa-scaffold`; no AI attribution in commits.
 
 ## Progress
-- 2026-09-28: Document created. Writer delegation pending.
+- 2026-09-28: Document created. First writer completed T1–T4 before its transport was cancelled; resumed with a second writer for T5+T6. All tasks complete.
 
 ## Verification evidence
-(pending)
+- Writer self-check: `node --check` OK on sw.js + all js/*.js; manifest.json parses; index.html readback (5 tabs with exact labels, FAB, modal-root, login view); app.js readback (session restore, 300ms debounce, optimistic +1 Cap with rollback, two-step roulette, loading="lazy" in all 5 image paths).
+- Parent spot check: `node --check js/app.js` → OK; `git log --oneline` → 5 conventional commits; `git status --short` → clean.
+- `gentle-ai review assess --base-ref 821503d --committed-only` → risk `medium`, 1149 lines / 3 paths, `review_due=true (slice_budget_reached)`. RDD is globally OFF → native review lifecycle intentionally not started; recorded here, delivery under ordinary repository policy.
+- Parent structural readback of index.html → passes.
 
 ## Next step
-Delegate the writer with the full spec, then run the verification gate (RDD off → `gentle-ai review assess` tier table).
+User fills `js/config.js` (TMDB key, Supabase URL + anon key), runs `supabase/schema.sql` in the SQL Editor, creates the 2 auth users (`<usuario>@pelisme.app`) in Supabase Auth, and deploys statically. Push/PR and chain strategy (`ask-on-risk`) when the user decides.
