@@ -59,6 +59,80 @@ function tmdbRecommendations(mediaType, tmdbId) {
   return tmdbFetch(`/${mediaType}/${tmdbId}/recommendations`);
 }
 
+// Popular movies in Argentina right now (home row).
+function tmdbPopularMoviesAR(page = 1) {
+  return tmdbFetch('/movie/popular', { region: 'AR', page });
+}
+
+// Upcoming theatrical releases in Argentina (home row).
+function tmdbUpcomingAR(page = 1) {
+  return tmdbFetch('/movie/upcoming', { region: 'AR', page });
+}
+
+// Genre-filtered movie discovery, ordered by popularity (home rows).
+function tmdbDiscoverByGenre(genreId, page = 1) {
+  return tmdbFetch('/discover/movie', {
+    with_genres: genreId,
+    sort_by: 'popularity.desc',
+    page,
+  });
+}
+
+// --------------------------------------------------------------- genres ----
+
+const TMDB_GENRES_STORAGE_KEY = 'pelisme_tmdb_genres';
+const TMDB_GENRES_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+// In-flight promise shared by concurrent tmdbGenreList() callers so the
+// two /genre/*/list requests only fire once per session.
+let tmdbGenreListPromise = null;
+
+function tmdbReadGenreCache() {
+  try {
+    const raw = localStorage.getItem(TMDB_GENRES_STORAGE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached || !cached.genres || typeof cached.savedAt !== 'number') return null;
+    if (Date.now() - cached.savedAt > TMDB_GENRES_TTL_MS) return null;
+    return cached.genres;
+  } catch (err) {
+    return null; // Corrupted or unavailable storage: fall through to the network.
+  }
+}
+
+function tmdbWriteGenreCache(genres) {
+  try {
+    localStorage.setItem(
+      TMDB_GENRES_STORAGE_KEY,
+      JSON.stringify({ savedAt: Date.now(), genres })
+    );
+  } catch (err) {
+    // Storage full or blocked (private mode): caching is best-effort only.
+  }
+}
+
+// Merged {id: name} map of movie + tv genres with es-ES names.
+// Cached in localStorage for 30 days; concurrent calls share one request.
+async function tmdbGenreList() {
+  const cached = tmdbReadGenreCache();
+  if (cached) return cached;
+  if (!tmdbGenreListPromise) {
+    tmdbGenreListPromise = Promise.all([
+      tmdbFetch('/genre/movie/list'),
+      tmdbFetch('/genre/tv/list'),
+    ]).then(([movieList, tvList]) => {
+      const genres = {};
+      for (const genre of (movieList.genres || [])) genres[genre.id] = genre.name;
+      for (const genre of (tvList.genres || [])) genres[genre.id] = genre.name;
+      tmdbWriteGenreCache(genres);
+      return genres;
+    }).finally(() => {
+      tmdbGenreListPromise = null;
+    });
+  }
+  return tmdbGenreListPromise;
+}
+
 // Pick the best trailer link from a details payload:
 // prefers a YouTube entry of type 'Trailer', falls back to any YouTube video.
 function tmdbTrailerUrl(details) {
