@@ -15,6 +15,7 @@
   <script src="js/config.js"></script>
   <script src="js/tmdb.js"></script>
   <script src="js/supabaseClient.js"></script>
+  <script src="js/ai.js"></script>
   <script src="js/match.js"></script>
 </head>
 <body class="bg-[#0f172a] text-slate-100 min-h-screen antialiased">
@@ -50,12 +51,18 @@
     <header class="sticky top-0 z-30 bg-[#0f172a]/90 backdrop-blur border-b border-slate-800">
       <div class="max-w-5xl mx-auto flex items-center justify-between px-4 h-14">
         <span class="text-xl font-extrabold tracking-tight">Peli<span class="text-rose-500">sme</span></span>
-        <button id="signout-btn" title="Cerrar sesión" aria-label="Cerrar sesión"
-          class="p-2 rounded-full text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-5 h-5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-          </svg>
-        </button>
+        <div class="flex items-center gap-1">
+          <button id="stats-btn" title="Estadísticas" aria-label="Estadísticas"
+            class="p-2 rounded-full text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors">
+            📊
+          </button>
+          <button id="signout-btn" title="Cerrar sesión" aria-label="Cerrar sesión"
+            class="p-2 rounded-full text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-5 h-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -72,7 +79,19 @@
         </div>
 
         <h2 class="text-lg font-bold mb-3 text-slate-200">Tendencias de hoy</h2>
-        <div id="trending-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+        <div id="row-tendencias" class="hrow mb-6"></div>
+
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Populares en Argentina</h2>
+        <div id="row-populares-ar" class="hrow mb-6"></div>
+
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Próximos Estrenos</h2>
+        <div id="row-proximos-estrenos" class="hrow mb-6"></div>
+
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Acción pura</h2>
+        <div id="row-accion" class="hrow mb-6"></div>
+
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Comedias para reír</h2>
+        <div id="row-comedias" class="hrow mb-6"></div>
 
         <button id="roulette-fab"
           class="fab fixed right-4 z-40 rounded-full bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all font-bold px-5 py-3.5 shadow-lg shadow-rose-900/50">
@@ -100,7 +119,13 @@
 
       <!-- ==================================================== Recomendados -->
       <section id="tab-recomendados" class="tab-section hidden">
-        <h2 class="text-lg font-bold mb-3 text-slate-200">Elegidos para ustedes</h2>
+        <div class="flex items-center justify-between mb-3 gap-3">
+          <h2 class="text-lg font-bold text-slate-200">Elegidos para ustedes</h2>
+          <button id="ai-generate-btn"
+            class="shrink-0 rounded-lg bg-violet-600 hover:bg-violet-500 active:bg-violet-700 transition-colors px-4 py-2 text-sm font-bold">
+            ✨ Generar Recomendaciones con IA
+          </button>
+        </div>
         <div id="recomendados-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
       </section>
     </main>

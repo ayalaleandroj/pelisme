@@ -1,17 +1,17 @@
 // ============================================================================
-// Pelisme app: session restore, tab navigation, grids, detail modal and the
-// "¡Sorprendeme!" roulette.
+// Pelisme app: session restore, tab navigation, grids, detail modal, AI recs,
+// dual ratings, comments, tags, stats and the "¡Sorprendeme!" roulette.
 //
 // Depends on globals provided by classic scripts loaded before this module:
 //   js/config.js          -> CONFIG
 //   js/tmdb.js            -> tmdbImage, tmdbSearchMulti, tmdbTrending,
-//                            tmdbDetails, tmdbRecommendations, tmdbTrailerUrl
+//                            tmdbDetails, tmdbRecommendations, tmdbTrailerUrl,
+//                            tmdbPopularMoviesAR, tmdbUpcomingAR,
+//                            tmdbDiscoverByGenre, tmdbGenreList
 //   js/supabaseClient.js  -> authSignIn, authSignOut, authGetSession,
 //                            authOnChange, makeRowId, dbGet*/dbUpsert*/...
-//   js/match.js           -> matchBuildProfile, matchScore, matchLabel,
-//                            matchScoreRows, matchNormalizeCandidate,
-//                            matchBuildRecommendations, matchRoulette,
-//                            matchGetDetails
+//   js/ai.js              -> aiGetRecommendations
+//   js/match.js           -> matchGetDetails, matchNormalizeCandidate
 // ============================================================================
 
 // ------------------------------------------------------------ tiny helpers ---
@@ -64,12 +64,8 @@ const state = {
   vistos: null,
   watchlist: null,
   top: null,
-  profile: null,
-  // Invalidation flag: any library mutation dirties the taste profile and the
-  // TMDB-driven tabs so they rebuild on next activation.
-  profileDirty: true,
-  trendingCache: null,
-  recommendationsCache: null,
+  homeRows: null,
+  aiRecommendations: null,
 };
 
 // Refresh the shared library rows from Supabase.
@@ -90,27 +86,17 @@ async function ensureLibrary() {
   }
 }
 
-// Taste profile, rebuilt only when the library changed.
-async function ensureProfile() {
-  await ensureLibrary();
-  if (!state.profile || state.profileDirty) {
-    state.profile = await matchBuildProfile(state.vistos, state.top);
-    state.profileDirty = false;
-  }
-  return state.profile;
-}
-
-// Called after every mutation so dependent views rebuild.
-function invalidateDerived() {
-  state.profileDirty = true;
-  state.recommendationsCache = null;
-}
-
 // ------------------------------------------------------------- skeletons ---
 
 function renderSkeletons(container, count = 10) {
   container.innerHTML = Array.from({ length: count })
     .map(() => '<div class="skeleton aspect-[2/3] rounded-xl"></div>')
+    .join('');
+}
+
+function renderRowSkeletons(container) {
+  container.innerHTML = Array.from({ length: 8 })
+    .map(() => '<div class="skeleton aspect-[2/3] rounded-xl shrink-0" style="width:9rem"></div>')
     .join('');
 }
 
@@ -120,7 +106,6 @@ function renderEmpty(container, message) {
 
 // ------------------------------------------------------------- poster card ---
 
-// Shared card renderer. `badgeHtml` renders top-left, `footerHtml` bottom.
 function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', footerHtml = '' }) {
   const image = posterPath
     ? `<img src="${tmdbImage(posterPath, 'poster')}" alt="Póster de ${escapeHtml(title)}"
@@ -139,10 +124,6 @@ function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', foot
     </article>`;
 }
 
-function matchBadge(score) {
-  return `<span class="rounded-md bg-rose-600/95 px-1.5 py-0.5 text-[11px] font-bold shadow">${escapeHtml(matchLabel(score))}</span>`;
-}
-
 function ratingBadge(rating) {
   return `<span class="rounded-md bg-amber-400/95 text-slate-900 px-1.5 py-0.5 text-[11px] font-bold shadow">${escapeHtml(String(rating))} ★</span>`;
 }
@@ -150,44 +131,52 @@ function ratingBadge(rating) {
 // ============================================================== TAB LOADERS =
 
 // ------------------------------------------------------------- Descubrir ---
+
+const HOME_ROWS = [
+  { id: 'tendencias', fetcher: () => tmdbTrending() },
+  { id: 'populares-ar', fetcher: () => tmdbPopularMoviesAR() },
+  { id: 'proximos-estrenos', fetcher: () => tmdbUpcomingAR() },
+  { id: 'accion', fetcher: () => tmdbDiscoverByGenre(28) },
+  { id: 'comedias', fetcher: () => tmdbDiscoverByGenre(35) },
+];
+
 async function loadDescubrir() {
-  const grid = $('#trending-grid');
-  if (state.trendingCache) {
-    renderTrending(grid, state.trendingCache);
+  if (state.homeRows) {
+    renderHomeRows(state.homeRows);
     return;
   }
-  renderSkeletons(grid);
-  try {
-    const [trending, profile] = await Promise.all([tmdbTrending(), ensureProfile()]);
-    const items = (trending.results || [])
-      .filter((r) => r.media_type === 'movie' || r.media_type === 'tv')
-      .map((r) => matchNormalizeCandidate(r));
-    // List-level score only: genre affinity × quality, no per-card details.
-    const scored = items.map((candidate) => ({
-      candidate,
-      score: matchScore(profile, candidate, null),
-    }));
-    state.trendingCache = scored;
-    renderTrending(grid, scored);
-  } catch (err) {
-    renderEmpty(grid, 'No se pudieron cargar las tendencias.');
+  for (const row of HOME_ROWS) {
+    renderRowSkeletons($(`#row-${row.id}`));
   }
+  const results = await Promise.all(HOME_ROWS.map(async (row) => {
+    try {
+      const data = await row.fetcher();
+      const items = (data.results || [])
+        .filter((r) => r.media_type === 'movie' || r.media_type === 'tv')
+        .map((r) => matchNormalizeCandidate(r));
+      return { id: row.id, items };
+    } catch (err) {
+      return { id: row.id, items: [] };
+    }
+  }));
+  state.homeRows = results;
+  renderHomeRows(results);
 }
 
-function renderTrending(grid, scored) {
-  if (!scored.length) {
-    renderEmpty(grid, 'No hay tendencias disponibles.');
-    return;
+function renderHomeRows(rows) {
+  for (const row of rows) {
+    const container = $(`#row-${row.id}`);
+    if (!row.items.length) {
+      container.innerHTML = '<p class="text-sm text-slate-500 py-2">No hay títulos disponibles.</p>';
+      continue;
+    }
+    container.innerHTML = row.items.map((item) => posterCard({
+      mediaType: item.mediaType,
+      tmdbId: item.tmdbId,
+      title: item.title,
+      posterPath: item.posterPath,
+    })).join('');
   }
-  grid.innerHTML = scored
-    .map(({ candidate, score }) => posterCard({
-      mediaType: candidate.mediaType,
-      tmdbId: candidate.tmdbId,
-      title: candidate.title,
-      posterPath: candidate.posterPath,
-      badgeHtml: matchBadge(score),
-    }))
-    .join('');
 }
 
 // ---------------------------------------------------------------- Vistos ---
@@ -230,17 +219,14 @@ async function loadWatchlist() {
   const grid = $('#watchlist-grid');
   renderSkeletons(grid);
   try {
-    const profile = await ensureProfile();
+    await ensureLibrary();
     const rows = state.watchlist;
     if (!rows.length) {
       renderEmpty(grid, 'La watchlist está vacía.');
       return;
     }
-    // Score with details: matchScoreRows fetches (cached) TMDB details.
-    const scores = await matchScoreRows(profile, rows);
     grid.innerHTML = rows.map((row) => {
       const tmdbId = Number(row.id.slice(row.media_type.length + 1));
-      const score = scores.get(row.id) || 0;
       const footer = `
         <div class="mt-1">
           <button type="button" data-quick-seen="${escapeHtml(row.id)}"
@@ -251,17 +237,12 @@ async function loadWatchlist() {
         tmdbId,
         title: row.title,
         posterPath: row.poster_path,
-        badgeHtml: `<span class="rounded-md bg-rose-600/95 px-1.5 py-0.5 text-[11px] font-bold shadow">${matchPercentLabel(score)} de Coincidencia</span>`,
         footerHtml: footer,
       });
     }).join('');
   } catch (err) {
     renderEmpty(grid, 'No se pudo cargar la watchlist.');
   }
-}
-
-function matchPercentLabel(score) {
-  return `${Math.round(score * 100)}%`;
 }
 
 // ---------------------------------------------------------------- Mi Top ---
@@ -292,36 +273,56 @@ async function loadMiTop() {
 // ---------------------------------------------------------- Recomendados ---
 async function loadRecomendados() {
   const grid = $('#recomendados-grid');
-  if (state.recommendationsCache) {
-    renderRecomendados(grid, state.recommendationsCache);
+  if (state.aiRecommendations) {
+    renderRecomendados(grid, state.aiRecommendations);
     return;
   }
-  renderSkeletons(grid, 15);
-  try {
-    // Feed from the match engine: trending + per-favorite recommendations,
-    // deduped, excluding Vistos, sorted by match descending.
-    const scored = await matchBuildRecommendations();
-    state.recommendationsCache = scored;
-    renderRecomendados(grid, scored);
-  } catch (err) {
-    renderEmpty(grid, 'No se pudieron generar recomendaciones.');
-  }
+  renderEmpty(grid, 'Tocá "Generar Recomendaciones con IA" para obtener sugerencias personalizadas.');
 }
 
-function renderRecomendados(grid, scored) {
-  if (!scored.length) {
-    renderEmpty(grid, 'Sin recomendaciones por ahora. ¡Agregá títulos a Mi Top!');
+function renderRecomendados(grid, recs) {
+  if (!recs.length) {
+    renderEmpty(grid, 'No se pudieron generar recomendaciones.');
     return;
   }
-  grid.innerHTML = scored
-    .map(({ candidate, score }) => posterCard({
-      mediaType: candidate.mediaType,
-      tmdbId: candidate.tmdbId,
-      title: candidate.title,
-      posterPath: candidate.posterPath,
-      badgeHtml: matchBadge(score),
-    }))
-    .join('');
+  grid.innerHTML = recs.map((rec) => {
+    const image = rec.posterPath
+      ? `<img src="${tmdbImage(rec.posterPath, 'poster')}" alt="Póster de ${escapeHtml(rec.title)}" loading="lazy" class="w-full aspect-[2/3] object-cover">`
+      : `<div class="w-full aspect-[2/3] flex items-center justify-center bg-slate-800 text-slate-500 text-sm px-2 text-center">${escapeHtml(rec.title)}</div>`;
+    return `
+      <article class="ai-card cursor-pointer" data-media-type="${rec.mediaType}" data-tmdb-id="${rec.tmdbId}">
+        ${image}
+        <div class="p-3">
+          <p class="text-xs font-semibold leading-tight line-clamp-2 mb-1">${escapeHtml(rec.title)}</p>
+          <p class="text-[11px] text-slate-400 leading-snug line-clamp-3">${escapeHtml(rec.why)}</p>
+        </div>
+      </article>`;
+  }).join('');
+}
+
+async function handleGenerateAI() {
+  const btn = $('#ai-generate-btn');
+  const grid = $('#recomendados-grid');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Generando...';
+  grid.innerHTML = '<div class="skeleton col-span-full h-40 rounded-xl"></div>';
+  try {
+    await ensureLibrary();
+    const topTitles = state.top.map((row) => row.title);
+    const vistosHigh = state.vistos
+      .filter((row) => Number(row.rating) > 8)
+      .map((row) => ({ title: row.title, rating: Number(row.rating) }));
+    const recs = await aiGetRecommendations({ topTitles, vistosHigh });
+    state.aiRecommendations = recs;
+    renderRecomendados(grid, recs);
+  } catch (err) {
+    const message = err && err.message ? err.message : 'No se pudieron generar recomendaciones.';
+    grid.innerHTML = `<p class="col-span-full text-center text-rose-400 py-10">${escapeHtml(message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 }
 
 const TAB_LOADERS = {
@@ -465,6 +466,48 @@ function renderModalContent(details, mediaType, opts = {}) {
        </div>`
     : '';
 
+  // Ratings section (only for vistos)
+  const ratingsBlock = vistoRow ? `
+    <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
+      <h3 class="text-sm font-bold text-slate-300 mb-2">Nuestras notas</h3>
+      <div id="ratings-list" class="flex flex-wrap gap-2 mb-3"></div>
+      <div class="flex gap-2">
+        <input id="rating-input" type="number" min="1" max="10" step="0.5"
+          class="w-24 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
+          placeholder="1-10">
+        <button type="button" data-action="submit-rating"
+          class="rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors px-4 py-2 text-sm font-bold">Puntuar</button>
+      </div>
+    </div>` : '';
+
+  // Comments section (any title)
+  const commentsBlock = `
+    <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
+      <h3 class="text-sm font-bold text-slate-300 mb-2">Comentarios</h3>
+      <div id="comments-list" class="space-y-2 mb-3 max-h-48 overflow-y-auto"></div>
+      <div class="flex gap-2">
+        <input id="comment-input" type="text"
+          class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
+          placeholder="Escribí un comentario...">
+        <button type="button" data-action="submit-comment"
+          class="rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors px-4 py-2 text-sm font-bold">Enviar</button>
+      </div>
+    </div>`;
+
+  // Tags section (vistos and watchlist)
+  const tagsBlock = (vistoRow || inWatchlist) ? `
+    <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
+      <h3 class="text-sm font-bold text-slate-300 mb-2">Etiquetas</h3>
+      <div id="tags-list" class="flex flex-wrap gap-1.5 mb-3"></div>
+      <div class="flex gap-2">
+        <input id="tag-input" type="text"
+          class="flex-1 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
+          placeholder="Nueva etiqueta...">
+        <button type="button" data-action="add-tag"
+          class="rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors px-4 py-2 text-sm font-bold">Añadir</button>
+      </div>
+    </div>` : '';
+
   $('#modal-body').innerHTML = `
     ${backdropBlock}
     <div class="p-5 sm:p-6 ${backdropBlock ? '-mt-16 relative' : ''}">
@@ -494,6 +537,10 @@ function renderModalContent(details, mediaType, opts = {}) {
         <button type="button" data-action="toggle-seen-form"
           class="rounded-lg px-4 py-2 text-sm font-bold bg-rose-600 hover:bg-rose-500 transition-colors">Marcar como Vista</button>
       </div>
+
+      ${ratingsBlock}
+      ${commentsBlock}
+      ${tagsBlock}
 
       <form id="seen-form" class="${opts.expandRating ? '' : 'hidden'} mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4 space-y-3">
         <div>
@@ -525,9 +572,83 @@ async function openDetail(mediaType, tmdbId, opts = {}) {
     await ensureLibrary();
     const details = await matchGetDetails(mediaType, tmdbId);
     renderModalContent(details, mediaType, opts);
+    const rowId = makeRowId(mediaType, details.id);
+    loadModalExtras(rowId, mediaType, details.id);
   } catch (err) {
     renderModalError();
   }
+}
+
+// Load ratings, comments and tags asynchronously after the modal renders.
+async function loadModalExtras(rowId, mediaType, tmdbId) {
+  // Comments for any title
+  try {
+    const comments = await dbGetComments(rowId);
+    renderComments(comments);
+  } catch (err) {
+    // Non-critical: comments are best-effort
+  }
+
+  // Ratings (only for vistos)
+  const vistoRow = state.vistos.find((r) => r.id === rowId);
+  if (vistoRow) {
+    try {
+      const ratings = await dbGetRatings(rowId);
+      renderRatings(ratings);
+    } catch (err) {
+      // Non-critical
+    }
+  }
+
+  // Tags (vistos and watchlist)
+  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
+  if (vistoRow || inWatchlist) {
+    const table = vistoRow ? 'vistos' : 'watchlist';
+    const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
+    renderTags(row.tags || []);
+  }
+}
+
+function renderRatings(ratings) {
+  const container = $('#ratings-list');
+  if (!container) return;
+  if (!ratings.length) {
+    container.innerHTML = '<p class="text-xs text-slate-500">Todavía no hay notas.</p>';
+    return;
+  }
+  container.innerHTML = ratings.map((r) => `
+    <span class="rounded-md bg-amber-400/95 text-slate-900 px-2 py-0.5 text-xs font-bold shadow">
+      ${escapeHtml(r.author)}: ${escapeHtml(String(r.rating))} ★
+    </span>`).join('');
+}
+
+function renderComments(comments) {
+  const container = $('#comments-list');
+  if (!container) return;
+  if (!comments.length) {
+    container.innerHTML = '<p class="text-xs text-slate-500">Todavía no hay comentarios.</p>';
+    return;
+  }
+  container.innerHTML = comments.map((c) => `
+    <div class="comment-bubble">
+      <p class="text-xs font-bold text-rose-400">${escapeHtml(c.author)}</p>
+      <p class="text-sm text-slate-200 mt-0.5">${escapeHtml(c.body)}</p>
+    </div>`).join('');
+}
+
+function renderTags(tags) {
+  const container = $('#tags-list');
+  if (!container) return;
+  if (!tags.length) {
+    container.innerHTML = '<p class="text-xs text-slate-500">Sin etiquetas.</p>';
+    return;
+  }
+  container.innerHTML = tags.map((tag, i) => `
+    <span class="chip">
+      ${escapeHtml(tag)}
+      <button type="button" data-action="remove-tag" data-tag-index="${i}"
+        class="text-slate-400 hover:text-rose-400 font-bold ml-0.5">&times;</button>
+    </span>`).join('');
 }
 
 // ----------------------------------------------------- modal action wiring ---
@@ -543,12 +664,11 @@ function buildLibraryRow(details, mediaType) {
 
 async function refreshModalAfterMutation() {
   if (!modalContext) return;
-  invalidateDerived();
   renderModalContent(modalContext.details, modalContext.mediaType, modalContext.opts);
   TAB_LOADERS[state.activeTab]();
 }
 
-async function handleModalAction(action) {
+async function handleModalAction(action, event) {
   if (!modalContext) return;
   const { details, mediaType } = modalContext;
   const row = buildLibraryRow(details, mediaType);
@@ -572,11 +692,88 @@ async function handleModalAction(action) {
     } else if (action === 'toggle-seen-form') {
       $('#seen-form').classList.toggle('hidden');
       return;
+    } else if (action === 'submit-rating') {
+      await handleSubmitRating();
+      return;
+    } else if (action === 'submit-comment') {
+      await handleSubmitComment();
+      return;
+    } else if (action === 'add-tag') {
+      await handleAddTag();
+      return;
+    } else if (action === 'remove-tag') {
+      const btn = event.target.closest('[data-action="remove-tag"]');
+      await handleRemoveTag(btn);
+      return;
     }
     await refreshModalAfterMutation();
   } catch (err) {
     showToast('No se pudo guardar el cambio.', 'error');
   }
+}
+
+async function handleSubmitRating() {
+  if (!modalContext) return;
+  const input = $('#rating-input');
+  const rating = Number(input.value);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 10) {
+    showToast('La nota tiene que estar entre 1 y 10.', 'error');
+    return;
+  }
+  const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
+  await dbUpsertRating(rowId, rating);
+  showToast('¡Nota guardada!');
+  const ratings = await dbGetRatings(rowId);
+  renderRatings(ratings);
+}
+
+async function handleSubmitComment() {
+  if (!modalContext) return;
+  const input = $('#comment-input');
+  const body = input.value.trim();
+  if (!body) return;
+  const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
+  await dbAddComment(rowId, body);
+  input.value = '';
+  showToast('Comentario añadido');
+  const comments = await dbGetComments(rowId);
+  renderComments(comments);
+}
+
+async function handleAddTag() {
+  if (!modalContext) return;
+  const input = $('#tag-input');
+  const tag = input.value.trim();
+  if (!tag) return;
+  const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
+  const vistoRow = state.vistos.find((r) => r.id === rowId);
+  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
+  const table = vistoRow ? 'vistos' : 'watchlist';
+  const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
+  const tags = row.tags || [];
+  if (!tags.includes(tag)) {
+    tags.push(tag);
+    await dbUpdateTags(table, rowId, tags);
+    row.tags = tags;
+  }
+  input.value = '';
+  renderTags(tags);
+}
+
+async function handleRemoveTag(btn) {
+  if (!modalContext) return;
+  if (!btn) return;
+  const index = Number(btn.dataset.tagIndex);
+  const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
+  const vistoRow = state.vistos.find((r) => r.id === rowId);
+  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
+  const table = vistoRow ? 'vistos' : 'watchlist';
+  const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
+  const tags = row.tags || [];
+  tags.splice(index, 1);
+  await dbUpdateTags(table, rowId, tags);
+  row.tags = tags;
+  renderTags(tags);
 }
 
 async function handleSeenSubmit(event) {
@@ -602,14 +799,12 @@ async function handleSeenSubmit(event) {
   try {
     await dbUpsertVisto(row);
     state.vistos = [row, ...state.vistos.filter((r) => r.id !== row.id)];
-    // A watched title no longer belongs in the watchlist.
     if (state.watchlist.some((r) => r.id === row.id)) {
       await dbRemoveFromWatchlist(row.id);
       state.watchlist = state.watchlist.filter((r) => r.id !== row.id);
     }
     showToast('¡Guardado en Vistos!');
     closeModal();
-    invalidateDerived();
     TAB_LOADERS[state.activeTab]();
   } catch (err) {
     showToast('No se pudo guardar en Vistos.', 'error');
@@ -696,7 +891,6 @@ function bindSearch() {
 
 // ============================================================ QUICK ACTIONS =
 
-// Optimistic "+1 Cap": bump the episode locally, persist, roll back on error.
 async function handleIncrementEpisode(rowId, button) {
   const row = state.vistos.find((r) => r.id === rowId);
   if (!row) return;
@@ -719,7 +913,11 @@ async function handleIncrementEpisode(rowId, button) {
 }
 
 function bindGridActions() {
-  const grids = ['#trending-grid', '#vistos-grid', '#watchlist-grid', '#mitop-grid', '#recomendados-grid'];
+  const grids = [
+    '#row-tendencias', '#row-populares-ar', '#row-proximos-estrenos',
+    '#row-accion', '#row-comedias',
+    '#vistos-grid', '#watchlist-grid', '#mitop-grid', '#recomendados-grid',
+  ];
 
   for (const selector of grids) {
     $(selector).addEventListener('click', (event) => {
@@ -754,22 +952,255 @@ async function handleRoulette() {
   const original = fab.textContent;
   fab.textContent = '🎲 Buscando...';
   try {
-    // Two-step roulette lives in match.js: watchlist gems > 80% first, then a
-    // random Mi Top recommendation pool (fallback: trending), excluding Vistos.
-    const pick = await matchRoulette();
-    if (!pick) {
-      showToast('No encontré ninguna sorpresa nueva.', 'error');
+    await ensureLibrary();
+    const filters = await showRouletteFilter();
+    if (!filters) {
+      fab.disabled = false;
+      fab.textContent = original;
       return;
     }
-    openDetail(pick.candidate.mediaType, pick.candidate.tmdbId, {
-      surprise: true,
-      score: pick.score,
-    });
+    const pick = await pickRoulette(filters);
+    if (!pick) {
+      showToast('No encontré ninguna sorpresa con esos filtros.', 'error');
+      return;
+    }
+    openDetail(pick.mediaType, pick.tmdbId, { surprise: true });
   } catch (err) {
     showToast('La ruleta falló. Probá de nuevo.', 'error');
   } finally {
     fab.disabled = false;
     fab.textContent = original;
+  }
+}
+
+function showRouletteFilter() {
+  return new Promise((resolve) => {
+    const root = $('#modal-root');
+    root.innerHTML = `
+      <div id="modal-overlay" class="modal-backdrop fixed inset-0 z-50 overflow-y-auto">
+        <div class="absolute inset-0 bg-black/75" data-modal-close></div>
+        <div class="modal-panel relative z-10 mx-auto my-0 sm:my-10 w-full max-w-md bg-slate-900 sm:rounded-2xl shadow-2xl min-h-full sm:min-h-0 overflow-hidden">
+          <button type="button" data-modal-close aria-label="Cerrar"
+            class="absolute top-3 right-3 z-20 rounded-full bg-black/60 hover:bg-black/80 p-2 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <div class="p-6">
+            <h2 class="text-xl font-extrabold mb-4">🎲 Filtros de la ruleta</h2>
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Tipo</label>
+                <select id="filter-media-type" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+                  <option value="all">Todos</option>
+                  <option value="movie">Películas</option>
+                  <option value="tv">Series</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Género</label>
+                <select id="filter-genre" class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+                  <option value="all">Todos</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Duración máxima (min, opcional)</label>
+                <input id="filter-max-duration" type="number" min="1" step="1" placeholder="Ej: 120"
+                  class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+              </div>
+            </div>
+            <div class="flex gap-3 mt-6">
+              <button type="button" data-action="roulette-cancel"
+                class="flex-1 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors font-bold py-2.5 text-sm">Cancelar</button>
+              <button type="button" data-action="roulette-apply"
+                class="flex-1 rounded-lg bg-rose-600 hover:bg-rose-500 transition-colors font-bold py-2.5 text-sm">¡Girar!</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    document.body.classList.add('modal-open');
+    requestAnimationFrame(() => $('#modal-overlay').classList.add('modal-visible'));
+
+    // Populate genre dropdown
+    tmdbGenreList().then((genres) => {
+      const select = $('#filter-genre');
+      for (const [id, name] of Object.entries(genres)) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+    }).catch(() => {});
+
+    const overlay = $('#modal-overlay');
+    overlay.addEventListener('click', (event) => {
+      if (event.target.closest('[data-modal-close]')) {
+        closeModal();
+        resolve(null);
+        return;
+      }
+      const actionBtn = event.target.closest('[data-action]');
+      if (actionBtn) {
+        if (actionBtn.dataset.action === 'roulette-cancel') {
+          closeModal();
+          resolve(null);
+        } else if (actionBtn.dataset.action === 'roulette-apply') {
+          const mediaType = $('#filter-media-type').value;
+          const genre = $('#filter-genre').value;
+          const maxDuration = Number($('#filter-max-duration').value) || null;
+          closeModal();
+          resolve({ mediaType, genre, maxDuration });
+        }
+      }
+    });
+  });
+}
+
+async function pickRoulette(filters) {
+  const seenIds = new Set(state.vistos.map((row) => row.id));
+  const pool = [];
+
+  // Watchlist items
+  for (const row of state.watchlist) {
+    const tmdbId = Number(row.id.slice(row.media_type.length + 1));
+    pool.push({ mediaType: row.media_type, tmdbId, genreIds: row.genre_ids || [], runtime: row.runtime || null });
+  }
+
+  // Trending fallback
+  try {
+    const trending = await tmdbTrending();
+    for (const item of (trending.results || [])) {
+      if (item.media_type === 'movie' || item.media_type === 'tv') {
+        pool.push({ mediaType: item.media_type, tmdbId: item.id, genreIds: item.genre_ids || [], runtime: null });
+      }
+    }
+  } catch (err) {
+    // Trending failing is not critical
+  }
+
+  // Dedupe and exclude vistos
+  const seen = new Set();
+  const candidates = pool.filter((c) => {
+    const key = makeRowId(c.mediaType, c.tmdbId);
+    if (seen.has(key) || seenIds.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Apply filters
+  let filtered = candidates;
+  if (filters.mediaType !== 'all') {
+    filtered = filtered.filter((c) => c.mediaType === filters.mediaType);
+  }
+  if (filters.genre !== 'all') {
+    const genreId = Number(filters.genre);
+    filtered = filtered.filter((c) => c.genreIds.includes(genreId));
+  }
+  if (filters.maxDuration) {
+    // Fetch details for items missing runtime to apply duration filter
+    const withRuntime = await Promise.all(filtered.map(async (c) => {
+      if (c.runtime) return c;
+      try {
+        const details = await matchGetDetails(c.mediaType, c.tmdbId);
+        return { ...c, runtime: details.runtime || details.episode_run_time?.[0] || null };
+      } catch (err) {
+        return c;
+      }
+    }));
+    filtered = withRuntime.filter((c) => !c.runtime || c.runtime <= filters.maxDuration);
+  }
+
+  if (!filtered.length) return null;
+  return filtered[Math.floor(Math.random() * filtered.length)];
+}
+
+// ==================================================================== STATS ==
+
+async function handleStats() {
+  try {
+    await ensureLibrary();
+    const totalVistos = state.vistos.length;
+    const movies = state.vistos.filter((r) => r.media_type === 'movie').length;
+    const series = state.vistos.filter((r) => r.media_type === 'tv').length;
+
+    // Estimated watch time
+    let totalMinutes = 0;
+    const genreCounts = {};
+
+    await Promise.all(state.vistos.map(async (row) => {
+      const tmdbId = Number(row.id.slice(row.media_type.length + 1));
+      try {
+        const details = await matchGetDetails(row.media_type, tmdbId);
+        if (row.media_type === 'movie') {
+          totalMinutes += details.runtime || 0;
+        } else {
+          const episodes = row.current_episode || details.number_of_episodes || 0;
+          const epRuntime = (details.episode_run_time && details.episode_run_time[0]) || 45;
+          totalMinutes += episodes * epRuntime;
+        }
+        for (const g of (details.genres || [])) {
+          genreCounts[g.name] = (genreCounts[g.name] || 0) + 1;
+        }
+      } catch (err) {
+        // Skip titles with failed detail fetch
+      }
+    }));
+
+    const hours = Math.round(totalMinutes / 60);
+    const days = (hours / 24).toFixed(1);
+
+    const topGenres = Object.entries(genreCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }));
+
+    const root = $('#modal-root');
+    root.innerHTML = `
+      <div id="modal-overlay" class="modal-backdrop fixed inset-0 z-50 overflow-y-auto">
+        <div class="absolute inset-0 bg-black/75" data-modal-close></div>
+        <div class="modal-panel relative z-10 mx-auto my-0 sm:my-10 w-full max-w-md bg-slate-900 sm:rounded-2xl shadow-2xl min-h-full sm:min-h-0 overflow-hidden">
+          <button type="button" data-modal-close aria-label="Cerrar"
+            class="absolute top-3 right-3 z-20 rounded-full bg-black/60 hover:bg-black/80 p-2 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <div class="p-6">
+            <h2 class="text-xl font-extrabold mb-4">📊 Tus estadísticas</h2>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${totalVistos}</p>
+                <p class="text-xs text-slate-400 mt-1">Títulos vistos</p>
+              </div>
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${hours}h</p>
+                <p class="text-xs text-slate-400 mt-1">Tiempo estimado (${days} días)</p>
+              </div>
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${movies}</p>
+                <p class="text-xs text-slate-400 mt-1">Películas</p>
+              </div>
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${series}</p>
+                <p class="text-xs text-slate-400 mt-1">Series</p>
+              </div>
+            </div>
+            ${topGenres.length ? `
+              <h3 class="text-sm font-bold text-slate-300 mb-2">Géneros favoritos</h3>
+              <div class="space-y-1.5">
+                ${topGenres.map((g) => `
+                  <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-300">${escapeHtml(g.name)}</span>
+                    <span class="text-slate-500">${g.count}</span>
+                  </div>`).join('')}
+              </div>` : '<p class="text-sm text-slate-500">Marcá títulos como ver para ver tus géneros favoritos.</p>'}
+          </div>
+        </div>
+      </div>`;
+    document.body.classList.add('modal-open');
+    requestAnimationFrame(() => $('#modal-overlay').classList.add('modal-visible'));
+  } catch (err) {
+    showToast('No se pudieron cargar las estadísticas.', 'error');
   }
 }
 
@@ -847,7 +1278,7 @@ function bindModal() {
     }
     const actionBtn = event.target.closest('[data-action]');
     if (actionBtn) {
-      handleModalAction(actionBtn.dataset.action);
+      handleModalAction(actionBtn.dataset.action, event);
     }
   });
 
@@ -872,6 +1303,8 @@ async function init() {
   bindGridActions();
   bindModal();
   $('#roulette-fab').addEventListener('click', handleRoulette);
+  $('#stats-btn').addEventListener('click', handleStats);
+  $('#ai-generate-btn').addEventListener('click', handleGenerateAI);
 
   // Session restore on load: no session -> login view only.
   try {

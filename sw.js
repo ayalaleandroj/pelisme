@@ -4,7 +4,7 @@
 //   - TMDB images (image.tmdb.org): stale-while-revalidate.
 //   - Live data (api.themoviedb.org, *.supabase.co): network-first, never cached.
 
-const SHELL_CACHE = 'pelisme-shell-v1';
+const SHELL_CACHE = 'pelisme-shell-v2';
 const IMG_CACHE = 'pelisme-img-v1';
 
 const SHELL_ASSETS = [
@@ -14,6 +14,7 @@ const SHELL_ASSETS = [
   './js/config.js',
   './js/tmdb.js',
   './js/supabaseClient.js',
+  './js/ai.js',
   './js/match.js',
   './js/app.js',
   './manifest.json',

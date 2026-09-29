@@ -104,3 +104,70 @@ body.modal-open {
   transform: translateY(-3px);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
+
+/* --------------------------------------------------------- horizontal rows */
+.hrow {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.5rem;
+}
+.hrow::-webkit-scrollbar {
+  display: none;
+}
+.hrow > * {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+  width: 9rem;
+}
+@media (min-width: 640px) {
+  .hrow > * {
+    width: 10rem;
+  }
+}
+
+/* ------------------------------------------------------------------ chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 9999px;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+/* -------------------------------------------------------- comment bubbles */
+.comment-bubble {
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 0.625rem 0.875rem;
+}
+
+/* ------------------------------------------------------------- stat cards */
+.stat-card {
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- ai cards */
+.ai-card {
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.ai-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
