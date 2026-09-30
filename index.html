@@ -142,14 +142,26 @@
 
       <!-- ======================================================== Vistos -->
       <section id="tab-completed" class="tab-section hidden">
-        <h2 class="text-lg font-bold mb-3 text-slate-200">Vistos</h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-slate-200">Vistos</h2>
+          <div class="flex gap-1 rounded-lg bg-slate-800 p-1">
+            <button type="button" class="media-tab-btn rounded-md px-3 py-1 text-xs font-bold transition-colors bg-rose-600 text-white" data-tab-section="completed" data-media-type="movie">Películas</button>
+            <button type="button" class="media-tab-btn rounded-md px-3 py-1 text-xs font-bold transition-colors text-slate-400 hover:text-white" data-tab-section="completed" data-media-type="tv">Series</button>
+          </div>
+        </div>
         <p class="text-sm text-slate-400 mb-4">Películas completas y series terminadas al 100%.</p>
         <div id="completed-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
       </section>
 
       <!-- ======================================================= Watchlist -->
       <section id="tab-watchlist" class="tab-section hidden">
-        <h2 class="text-lg font-bold mb-3 text-slate-200">Pendientes</h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-bold text-slate-200">Pendientes</h2>
+          <div class="flex gap-1 rounded-lg bg-slate-800 p-1">
+            <button type="button" class="media-tab-btn rounded-md px-3 py-1 text-xs font-bold transition-colors bg-rose-600 text-white" data-tab-section="watchlist" data-media-type="movie">Películas</button>
+            <button type="button" class="media-tab-btn rounded-md px-3 py-1 text-xs font-bold transition-colors text-slate-400 hover:text-white" data-tab-section="watchlist" data-media-type="tv">Series</button>
+          </div>
+        </div>
         <div id="watchlist-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
       </section>
 

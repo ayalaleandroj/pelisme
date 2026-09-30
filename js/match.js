@@ -83,3 +83,80 @@ function matchNormalizeCandidate(source, fallbackMediaType) {
     posterPath: source.poster_path || '',
   };
 }
+
+// ------------------------------------------------------- match engine ----
+
+// Build genre frequency vector from user_media rows.
+function buildGenreVector(rows) {
+  const vector = {};
+  for (const row of rows) {
+    for (const gid of (row.genre_ids || [])) {
+      vector[gid] = (vector[gid] || 0) + 1;
+    }
+  }
+  return vector;
+}
+
+// Cosine similarity between two genre vectors.
+function cosineSimilarity(vecA, vecB) {
+  const keys = new Set([...Object.keys(vecA), ...Object.keys(vecB)]);
+  let dot = 0, magA = 0, magB = 0;
+  for (const k of keys) {
+    const a = vecA[k] || 0;
+    const b = vecB[k] || 0;
+    dot += a * b;
+    magA += a * a;
+    magB += b * b;
+  }
+  if (!magA || !magB) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+// Calculate match percentage between the two app users.
+// Returns { percentage, sharedGenres, userA, userB }.
+async function matchCalculateCompatibility() {
+  const allRows = await dbGetUserMedia();
+  // Split by author (first user vs everyone else)
+  const userAName = allRows.length > 0 ? allRows[0].added_by : null;
+  const userARows = allRows.filter((r) => r.added_by === userAName);
+  const userBRows = allRows.filter((r) => r.added_by !== userAName);
+  const vecA = buildGenreVector(userARows);
+  const vecB = buildGenreVector(userBRows);
+  const similarity = cosineSimilarity(vecA, vecB);
+  // Shared genre IDs
+  const sharedGenreIds = Object.keys(vecA).filter((k) => vecB[k]);
+  // Average rating per user
+  const avgA = userARows.length
+    ? userARows.reduce((s, r) => s + (r.rating || 0), 0) / userARows.length
+    : 0;
+  const avgB = userBRows.length
+    ? userBRows.reduce((s, r) => s + (r.rating || 0), 0) / userBRows.length
+    : 0;
+  // Rating factor: penalize if users rate very differently
+  let ratingFactor = 1;
+  if (avgA > 0 && avgB > 0) {
+    const diff = Math.abs(avgA - avgB);
+    ratingFactor = Math.max(0.5, 1 - diff / 10);
+  }
+  const percentage = Math.round(similarity * ratingFactor * 100);
+  return {
+    percentage: Math.min(100, Math.max(0, percentage)),
+    sharedGenres: sharedGenreIds,
+    userA: { count: userARows.length, avgRating: avgA.toFixed(1) },
+    userB: { count: userBRows.length, avgRating: avgB.toFixed(1) },
+  };
+}
+
+// Get top match titles (shared genres + high rating).
+async function matchGetTopMatches(limit = 10) {
+  const allRows = await dbGetUserMedia();
+  const compat = await matchCalculateCompatibility();
+  const scored = allRows.map((row) => {
+    const shared = (row.genre_ids || []).filter((g) => compat.sharedGenres.includes(String(g)));
+    return { ...row, matchScore: shared.length };
+  });
+  return scored
+    .filter((r) => r.matchScore > 0)
+    .sort((a, b) => b.matchScore - a.matchScore)
+    .slice(0, limit);
+}

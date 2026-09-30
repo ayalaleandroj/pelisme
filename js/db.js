@@ -46,6 +46,25 @@ async function dbUpsertUserMedia(row) {
   if (error) throw error;
 }
 
+// Ensure a title exists in user_media before rating. If it doesn't exist,
+// creates a minimal row with status 'watchlist'. Returns the row.
+async function dbEnsureUserMedia(rowId, details, mediaType) {
+  const existing = await dbGetUserMediaById(rowId);
+  if (existing) return existing;
+  const row = {
+    id: rowId,
+    id_tmdb: details.id,
+    media_type: mediaType,
+    title: details.title || details.name || '',
+    poster_path: details.poster_path || '',
+    status: 'watchlist',
+    genre_ids: (details.genres || []).map((g) => g.id),
+    runtime: details.runtime || (details.episode_run_time && details.episode_run_time[0]) || null,
+  };
+  await dbUpsertUserMedia(row);
+  return row;
+}
+
 // Update specific fields of a user_media row by id.
 async function dbUpdateUserMedia(id, updates) {
   const { error } = await sb

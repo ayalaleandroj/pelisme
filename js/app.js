@@ -78,6 +78,10 @@ const state = {
   homeRows: null,
   catalogMovies: { items: [], page: 0, totalPages: 1, scroller: null },
   catalogTv: { items: [], page: 0, totalPages: 1, scroller: null },
+  mediaTabState: {
+    completed: 'movie',
+    watchlist: 'movie',
+  },
 };
 
 // Refresh the full library from Supabase.
@@ -144,6 +148,12 @@ function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', foot
 
 function ratingBadge(rating) {
   return `<span class="rounded-md bg-amber-400/95 text-slate-900 px-1.5 py-0.5 text-[11px] font-bold shadow">${escapeHtml(String(rating))} ★</span>`;
+}
+
+function matchBadge(score) {
+  if (!score || score <= 0) return '';
+  const intensity = score >= 3 ? 'bg-rose-600' : score >= 2 ? 'bg-rose-500/80' : 'bg-rose-500/60';
+  return `<span class="rounded-md ${intensity} text-white px-1.5 py-0.5 text-[10px] font-bold">🔥 ${score} match</span>`;
 }
 
 // Quick action buttons for catalog posters.
@@ -375,9 +385,11 @@ async function loadCompleted() {
   renderSkeletons(grid);
   try {
     await ensureLibrary();
-    const rows = getByStatus('completed');
+    const mediaType = state.mediaTabState.completed;
+    const rows = getByStatus('completed').filter((r) => r.media_type === mediaType);
     if (!rows.length) {
-      renderEmpty(grid, 'Todavía no marcaron nada como visto.');
+      const label = mediaType === 'movie' ? 'películas' : 'series';
+      renderEmpty(grid, `Todavía no marcaron ${label} como vistas.`);
       return;
     }
     grid.innerHTML = rows.map((row) => {
@@ -401,9 +413,11 @@ async function loadWatchlist() {
   renderSkeletons(grid);
   try {
     await ensureLibrary();
-    const rows = getByStatus('watchlist');
+    const mediaType = state.mediaTabState.watchlist;
+    const rows = getByStatus('watchlist').filter((r) => r.media_type === mediaType);
     if (!rows.length) {
-      renderEmpty(grid, 'La watchlist está vacía.');
+      const label = mediaType === 'movie' ? 'películas' : 'series';
+      renderEmpty(grid, `No hay ${label} en la watchlist.`);
       return;
     }
     grid.innerHTML = rows.map((row) => {
@@ -948,11 +962,17 @@ async function handleSubmitRating() {
     return;
   }
   const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
+  // FIX: ensure the title exists in user_media before rating
+  await dbEnsureUserMedia(rowId, modalContext.details, modalContext.mediaType);
   await dbUpsertRating(rowId, rating);
-  // Also update the user_media rating column
   await dbUpdateUserMedia(rowId, { rating });
+  // Refresh local state
   const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
-  if (existingRow) existingRow.rating = rating;
+  if (existingRow) {
+    existingRow.rating = rating;
+  } else {
+    await loadLibrary();
+  }
   showToast('¡Nota guardada!');
   const ratings = await dbGetRatings(rowId);
   renderRatings(ratings);
@@ -1573,6 +1593,26 @@ function registerServiceWorker() {
   }
 }
 
+function bindMediaTabs() {
+  document.querySelectorAll('.media-tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.tabSection;
+      const mediaType = btn.dataset.mediaType;
+      state.mediaTabState[section] = mediaType;
+      // Update button styles
+      document.querySelectorAll(`.media-tab-btn[data-tab-section="${section}"]`).forEach((b) => {
+        const active = b === btn;
+        b.classList.toggle('bg-rose-600', active);
+        b.classList.toggle('text-white', active);
+        b.classList.toggle('text-slate-400', !active);
+        b.classList.toggle('hover:text-white', !active);
+      });
+      // Reload the section
+      TAB_LOADERS[section]();
+    });
+  });
+}
+
 function bindNavigation() {
   for (const btn of document.querySelectorAll('.nav-btn')) {
     btn.addEventListener('click', () => activateTab(btn.dataset.tab));
@@ -1605,6 +1645,7 @@ async function init() {
   bindSearch();
   bindGridActions();
   bindModal();
+  bindMediaTabs();
   $('#roulette-fab').addEventListener('click', handleRoulette);
   $('#stats-btn').addEventListener('click', handleStats);
   $('#ai-generate-btn').addEventListener('click', handleGenerateAI);
