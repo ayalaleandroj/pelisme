@@ -28,6 +28,15 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Horizontal scrollable nav for 7+ tabs */
+.nav-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Keep content clear of the fixed bottom nav (64px) + safe-area + breathing
    room for the floating roulette button. */
 .main-content {

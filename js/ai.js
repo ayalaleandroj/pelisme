@@ -1,8 +1,14 @@
 // ============================================================================
-// AI recommendation provider layer (Gemini / OpenAI).
-// Builds a taste-profile prompt, calls the configured LLM, parses the strict
-// JSON answer and resolves each suggested title against TMDB.
-// Depends on: js/config.js (CONFIG), js/tmdb.js (tmdbSearchMulti)
+// Pelisme v3.0 — AI recommendation engine with TMDB quality filter + LLM.
+// Flow:
+//   1. Fetch highly-rated user titles (rating >= 8) for taste profile
+//   2. Fetch quality pool from TMDB (/discover with vote_average.gte=7.5)
+//   3. Send both to LLM with a curated prompt
+//   4. Parse JSON response with IDs + justifications
+//   5. Resolve each suggestion against TMDB for full metadata
+//
+// Depends on: js/config.js (CONFIG), js/tmdb.js (tmdbSearchMulti, tmdbDetails),
+//             js/api.js (apiGetQualityPool)
 // ============================================================================
 
 // Default model per provider; CONFIG.AI_MODEL overrides it when set.
@@ -12,10 +18,10 @@ const AI_DEFAULT_MODELS = {
 };
 
 // User-facing error messages (Spanish, Rioplatense voseo).
-// Never include the API key in any error.
 const AI_ERROR_NO_KEY = 'Configurá tu clave de IA en js/config.js para generar recomendaciones.';
 const AI_ERROR_PROVIDER = 'La IA no respondió bien. Probá de nuevo en un ratito.';
 const AI_ERROR_NO_RESULTS = 'La IA no sugirió nada que podamos encontrar en TMDB. Probá de nuevo.';
+const AI_ERROR_NO_QUALITY = 'No encontré suficientes títulos de calidad en TMDB. Probá de nuevo.';
 
 // True only when an API key exists and is not an obvious placeholder.
 function aiIsConfigured() {
@@ -27,33 +33,52 @@ function aiIsConfigured() {
   return !placeholderPrefixes.some((prefix) => trimmed.startsWith(prefix));
 }
 
-// Spanish prompt: the model acts as a film curator and answers STRICT JSON.
-// topTitles: string[] of top-favorite titles.
-// vistosHigh: array of {title, rating} for highly-rated watched titles.
-function aiBuildPrompt({ topTitles = [], vistosHigh = [] } = {}) {
-  const topList = topTitles.length ? topTitles.join(', ') : '(sin favoritos todavía)';
-  const highList = vistosHigh.length
-    ? vistosHigh.map((item) => `${item.title} (${item.rating}/10)`).join(', ')
-    : '(sin vistos destacados todavía)';
+// ------------------------------------------------------- prompt builder ---
+
+// Build the AI prompt with user taste profile + TMDB quality candidates.
+// highlyRated: array of {title, rating} for titles rated 8+.
+// qualityCandidates: array of TMDB result objects from /discover.
+function aiBuildPrompt({ highlyRated = [], qualityCandidates = [] } = {}) {
+  const highList = highlyRated.length
+    ? highlyRated.map((item) => `${item.title} (${item.rating}/10)`).join(', ')
+    : '(sin títulos destacados todavía)';
+
+  // Format quality candidates for the prompt
+  const candidateList = qualityCandidates.length
+    ? qualityCandidates.map((item) => {
+        const title = item.title || item.name || '';
+        const year = (item.release_date || item.first_air_date || '').slice(0, 4);
+        const vote = (Number(item.vote_average) || 0).toFixed(1);
+        const type = item.media_type === 'tv' ? 'Serie' : 'Película';
+        const id = item.id;
+        return `- [${id}] ${title} (${year}) - ${type} - TMDB: ${vote}`;
+      }).join('\n')
+    : '(sin candidatos de calidad todavía)';
+
   return [
     'Actuá como un curador de cine y series que conoce muy bien el gusto de esta persona.',
     '',
-    `Sus favoritos absolutos: ${topList}.`,
-    `Títulos que ya vio y puntuó alto: ${highList}.`,
+    `El usuario califica con nota alta a: ${highList}.`,
     '',
-    'Recomendá EXACTAMENTE 5 títulos NUEVOS (películas o series) que NO estén en esas listas.',
-    'Mezclá películas y series según lo que mejor encaje con su gusto.',
+    'De esta lista de opciones de alta calidad de TMDB, selecciona las 5 mejores recomendaciones',
+    'que hagan un match perfecto con sus gustos. Prioriza la justificación personal.',
+    '',
+    'Opciones de alta calidad:',
+    candidateList,
     '',
     'Respondé SOLO con JSON estricto, sin texto extra, con este formato exacto:',
-    '{"recommendations":[{"title":"...","year":2000,"why":"..."}]}',
+    '{"recommendations":[{"id":123,"title":"...","why":"..."}]}',
     '',
-    'El campo "why" es UNA sola oración corta en español (voseo rioplatense) que explique',
+    'El campo "id" es el ID de TMDB de la recomendación (número entero).',
+    'El campo "why" es UNA justificación de 2 líneas en español (voseo rioplatense) que explique',
     'el motivo personal de la recomendación, haciendo referencia a su gusto.',
+    'NO incluyas títulos que el usuario ya calificó arriba.',
   ].join('\n');
 }
 
-// Raw text answer from the configured provider. Throws on HTTP/transport
-// errors. The API key is never logged nor included in thrown errors.
+// ------------------------------------------------------- provider call -----
+
+// Raw text answer from the configured provider. Throws on HTTP/transport errors.
 async function aiCallProvider(prompt) {
   const provider = CONFIG.AI_PROVIDER || 'gemini';
   const model = (CONFIG.AI_MODEL && CONFIG.AI_MODEL.trim()) || AI_DEFAULT_MODELS[provider];
@@ -82,8 +107,7 @@ async function aiCallProvider(prompt) {
     return content;
   }
 
-  // Default: Gemini. The key travels in the query string per the API spec;
-  // error messages below never echo the request URL.
+  // Default: Gemini
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(CONFIG.AI_API_KEY)}`;
   const response = await fetch(url, {
     method: 'POST',
@@ -104,6 +128,8 @@ async function aiCallProvider(prompt) {
   return content;
 }
 
+// ------------------------------------------------------- response parser ---
+
 // Defensive parse of the provider answer: strips markdown code fences,
 // JSON.parses and validates the items. Returns [] on garbage; never throws.
 function aiParseRecommendations(rawText) {
@@ -116,55 +142,91 @@ function aiParseRecommendations(rawText) {
     const items = Array.isArray(parsed) ? parsed : parsed.recommendations;
     if (!Array.isArray(items)) return [];
     return items
-      .filter((item) => item && typeof item.title === 'string' && item.title.trim()
+      .filter((item) => item
+        && (typeof item.id === 'number' || typeof item.id === 'string')
         && typeof item.why === 'string' && item.why.trim())
-      .map((item) => ({ title: item.title.trim(), why: item.why.trim() }));
+      .map((item) => ({
+        tmdbId: Number(item.id),
+        title: typeof item.title === 'string' ? item.title.trim() : '',
+        why: item.why.trim(),
+      }));
   } catch (err) {
     return [];
   }
 }
 
-// Resolve one AI-suggested title to its first TMDB movie/tv hit.
+// ------------------------------------------------------- TMDB resolution ---
+
+// Resolve one AI-suggested title to full TMDB metadata.
 // Returns null when nothing usable comes back.
-async function aiResolveTitle(title) {
-  const data = await tmdbSearchMulti(title);
-  const hit = (data.results || []).find(
-    (item) => item.media_type === 'movie' || item.media_type === 'tv'
-  );
-  if (!hit) return null;
-  return {
-    mediaType: hit.media_type,
-    tmdbId: hit.id,
-    title: hit.title || hit.name || title,
-    posterPath: hit.poster_path || null,
-  };
+async function aiResolveTitle(tmdbId, mediaType = 'movie') {
+  try {
+    const details = await tmdbDetails(mediaType, tmdbId);
+    return {
+      mediaType,
+      tmdbId: details.id,
+      title: details.title || details.name || '',
+      posterPath: details.poster_path || null,
+    };
+  } catch (err) {
+    return null;
+  }
 }
 
-// Full flow: config check -> prompt -> provider -> parse -> TMDB resolution.
+// ------------------------------------------------------- main entry point ---
+
+// Full flow: config check -> quality pool -> prompt -> provider -> parse -> resolve.
+// profileData: { highlyRated: [{title, rating}], excludeIds: [{idTmdb, mediaType}] }
 // Returns [{mediaType, tmdbId, title, posterPath, why}].
-// Throws an Error with a friendly Spanish message when not configured,
-// when the provider call fails, or when no title could be resolved.
-async function aiGetRecommendations(profileData) {
+async function aiGetRecommendations(profileData = {}) {
   if (!aiIsConfigured()) {
     throw new Error(AI_ERROR_NO_KEY);
   }
-  const prompt = aiBuildPrompt(profileData);
+
+  const { highlyRated = [], excludeIds = [] } = profileData;
+
+  // Step 1: Fetch quality pool from TMDB (movies + TV)
+  const [moviePool, tvPool] = await Promise.all([
+    apiGetQualityPool({ mediaType: 'movie', excludeTmdbIds: excludeIds, page: 1 }),
+    apiGetQualityPool({ mediaType: 'tv', excludeTmdbIds: excludeIds, page: 1 }),
+  ]);
+
+  // Combine and limit candidates for the prompt (max 30 to keep prompt manageable)
+  const allCandidates = [
+    ...moviePool.results.map((r) => ({ ...r, media_type: 'movie' })),
+    ...tvPool.results.map((r) => ({ ...r, media_type: 'tv' })),
+  ].slice(0, 30);
+
+  if (!allCandidates.length) {
+    throw new Error(AI_ERROR_NO_QUALITY);
+  }
+
+  // Step 2: Build prompt and call provider
+  const prompt = aiBuildPrompt({ highlyRated, qualityCandidates: allCandidates });
   let rawText;
   try {
     rawText = await aiCallProvider(prompt);
   } catch (err) {
     throw new Error(AI_ERROR_PROVIDER);
   }
+
+  // Step 3: Parse response
   const parsed = aiParseRecommendations(rawText);
+  if (!parsed.length) {
+    throw new Error(AI_ERROR_NO_RESULTS);
+  }
+
+  // Step 4: Resolve each suggestion against TMDB
   const resolved = [];
-  for (const item of parsed) {
-    try {
-      const hit = await aiResolveTitle(item.title);
-      if (hit) resolved.push({ ...hit, why: item.why });
-    } catch (err) {
-      // A single failed lookup must not kill the whole batch.
+  for (const item of parsed.slice(0, 5)) {
+    // Try movie first, then TV
+    let hit = await aiResolveTitle(item.tmdbId, 'movie');
+    if (!hit) hit = await aiResolveTitle(item.tmdbId, 'tv');
+    if (hit) {
+      resolved.push({ ...hit, why: item.why });
     }
   }
+
   if (!resolved.length) {
     throw new Error(AI_ERROR_NO_RESULTS);
   }

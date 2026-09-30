@@ -1,6 +1,7 @@
 // ============================================================================
-// Pelisme app: session restore, tab navigation, grids, detail modal, AI recs,
-// dual ratings, comments, tags, stats and the "¡Sorprendeme!" roulette.
+// Pelisme v3.0 — Main application module.
+// Tabs, catalog explorer with infinite scroll, management modal (CRUD),
+// watching vs completed logic, AI recommendations, roulette, stats.
 //
 // Depends on globals provided by classic scripts loaded before this module:
 //   js/config.js          -> CONFIG
@@ -9,7 +10,18 @@
 //                            tmdbPopularMoviesAR, tmdbUpcomingAR,
 //                            tmdbDiscoverByGenre, tmdbGenreList
 //   js/supabaseClient.js  -> authSignIn, authSignOut, authGetSession,
-//                            authOnChange, makeRowId, dbGet*/dbUpsert*/...
+//                            authOnChange, makeRowId, currentUsername
+//   js/db.js              -> dbGetUserMedia, dbGetByStatus, dbGetTopFavorites,
+//                            dbGetHighlyRated, dbGetLibraryTmdbIds,
+//                            dbUpsertUserMedia, dbUpdateUserMedia,
+//                            dbChangeStatus, dbDeleteUserMedia,
+//                            dbIncrementEpisode, dbIncrementSeason,
+//                            dbGetRatings, dbUpsertRating,
+//                            dbGetComments, dbAddComment, dbDeleteComment,
+//                            dbUpdateTags
+//   js/api.js             -> apiDiscoverMovies, apiDiscoverTv,
+//                            apiGetQualityPool, apiGetGenres, apiGetAllGenres,
+//                            createInfiniteScroll
 //   js/ai.js              -> aiGetRecommendations
 //   js/match.js           -> matchGetDetails, matchNormalizeCandidate
 // ============================================================================
@@ -60,30 +72,35 @@ function detailYear(details) {
 
 const state = {
   session: null,
-  activeTab: 'descubrir',
-  vistos: null,
-  watchlist: null,
-  top: null,
-  homeRows: null,
+  activeTab: 'inicio',
+  library: null,          // All user_media rows
   aiRecommendations: null,
+  homeRows: null,
+  catalogMovies: { items: [], page: 0, totalPages: 1, scroller: null },
+  catalogTv: { items: [], page: 0, totalPages: 1, scroller: null },
 };
 
-// Refresh the shared library rows from Supabase.
+// Refresh the full library from Supabase.
 async function loadLibrary() {
-  const [vistos, watchlist, top] = await Promise.all([
-    dbGetVistos(),
-    dbGetWatchlist(),
-    dbGetTopFavorites(),
-  ]);
-  state.vistos = vistos;
-  state.watchlist = watchlist;
-  state.top = top;
+  state.library = await dbGetUserMedia();
 }
 
 async function ensureLibrary() {
-  if (!state.vistos || !state.watchlist || !state.top) {
+  if (!state.library) {
     await loadLibrary();
   }
+}
+
+// Get library rows filtered by status.
+function getByStatus(status) {
+  if (!state.library) return [];
+  return state.library.filter((r) => r.status === status);
+}
+
+// Get top favorites.
+function getTopFavorites() {
+  if (!state.library) return [];
+  return state.library.filter((r) => r.is_top_favorite);
 }
 
 // ------------------------------------------------------------- skeletons ---
@@ -106,7 +123,7 @@ function renderEmpty(container, message) {
 
 // ------------------------------------------------------------- poster card ---
 
-function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', footerHtml = '' }) {
+function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', footerHtml = '', quickActions = '' }) {
   const image = posterPath
     ? `<img src="${tmdbImage(posterPath, 'poster')}" alt="Póster de ${escapeHtml(title)}"
          loading="lazy" class="w-full aspect-[2/3] object-cover">`
@@ -117,6 +134,7 @@ function posterCard({ mediaType, tmdbId, title, posterPath, badgeHtml = '', foot
       data-media-type="${mediaType}" data-tmdb-id="${tmdbId}">
       ${image}
       ${badgeHtml ? `<div class="absolute top-2 left-2">${badgeHtml}</div>` : ''}
+      ${quickActions ? `<div class="absolute top-2 right-2 flex flex-col gap-1">${quickActions}</div>` : ''}
       <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent p-2 pt-8">
         <p class="text-xs font-semibold leading-tight line-clamp-2">${escapeHtml(title)}</p>
         ${footerHtml}
@@ -128,9 +146,21 @@ function ratingBadge(rating) {
   return `<span class="rounded-md bg-amber-400/95 text-slate-900 px-1.5 py-0.5 text-[11px] font-bold shadow">${escapeHtml(String(rating))} ★</span>`;
 }
 
+// Quick action buttons for catalog posters.
+function catalogQuickActions(mediaType, tmdbId) {
+  return `
+    <button type="button" data-quick="seen" data-media-type="${mediaType}" data-tmdb-id="${tmdbId}"
+      class="rounded-md bg-emerald-600/90 hover:bg-emerald-500 px-2 py-1 text-[10px] font-bold transition-colors">✓ Vista</button>
+    <button type="button" data-quick="watchlist" data-media-type="${mediaType}" data-tmdb-id="${tmdbId}"
+      class="rounded-md bg-slate-700/90 hover:bg-slate-600 px-2 py-1 text-[10px] font-bold transition-colors">+ Watchlist</button>
+    <button type="button" data-quick="top" data-media-type="${mediaType}" data-tmdb-id="${tmdbId}"
+      class="rounded-md bg-amber-500/90 hover:bg-amber-400 text-slate-900 px-2 py-1 text-[10px] font-bold transition-colors">★ Top</button>
+  `;
+}
+
 // ============================================================== TAB LOADERS =
 
-// ------------------------------------------------------------- Descubrir ---
+// ------------------------------------------------------------- Inicio ---
 
 const HOME_ROWS = [
   { id: 'tendencias', fetcher: () => tmdbTrending() },
@@ -140,7 +170,7 @@ const HOME_ROWS = [
   { id: 'comedias', fetcher: () => tmdbDiscoverByGenre(35) },
 ];
 
-async function loadDescubrir() {
+async function loadInicio() {
   if (state.homeRows) {
     renderHomeRows(state.homeRows);
     return;
@@ -179,34 +209,184 @@ function renderHomeRows(rows) {
   }
 }
 
-// ---------------------------------------------------------------- Vistos ---
-async function loadVistos() {
-  const grid = $('#vistos-grid');
+// --------------------------------------------------- Catálogo Películas ---
+
+async function loadPeliculas() {
+  const grid = $('#catalog-movies-grid');
+  if (state.catalogMovies.scroller) return; // Already initialized
+
+  renderSkeletons(grid);
+
+  // Populate year filter
+  const yearSelect = $('#filter-year-movies');
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear; y >= 1980; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y;
+    yearSelect.appendChild(opt);
+  }
+
+  // Populate genre filter
+  const genres = await apiGetGenres('movie');
+  const genreSelect = $('#filter-genre-movies');
+  for (const g of genres) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name;
+    genreSelect.appendChild(opt);
+  }
+
+  // Setup infinite scroll
+  state.catalogMovies.scroller = createInfiniteScroll({
+    container: grid,
+    fetcher: (page) => apiDiscoverMovies({
+      page,
+      year: yearSelect.value || undefined,
+      genreId: genreSelect.value || undefined,
+    }),
+    renderItem: (item) => posterCard({
+      mediaType: 'movie',
+      tmdbId: item.id,
+      title: item.title || item.name || '',
+      posterPath: item.poster_path,
+      quickActions: catalogQuickActions('movie', item.id),
+    }),
+  });
+
+  // Reload on filter change
+  yearSelect.addEventListener('change', () => {
+    grid.innerHTML = '';
+    state.catalogMovies.scroller.reset();
+    state.catalogMovies.scroller.loadMore();
+  });
+  genreSelect.addEventListener('change', () => {
+    grid.innerHTML = '';
+    state.catalogMovies.scroller.reset();
+    state.catalogMovies.scroller.loadMore();
+  });
+
+  state.catalogMovies.scroller.loadMore();
+}
+
+// ----------------------------------------------------- Catálogo Series ---
+
+async function loadSeries() {
+  const grid = $('#catalog-tv-grid');
+  if (state.catalogTv.scroller) return;
+
+  renderSkeletons(grid);
+
+  // Populate year filter
+  const yearSelect = $('#filter-year-tv');
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear; y >= 1980; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = y;
+    yearSelect.appendChild(opt);
+  }
+
+  // Populate genre filter
+  const genres = await apiGetGenres('tv');
+  const genreSelect = $('#filter-genre-tv');
+  for (const g of genres) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name;
+    genreSelect.appendChild(opt);
+  }
+
+  // Setup infinite scroll
+  state.catalogTv.scroller = createInfiniteScroll({
+    container: grid,
+    fetcher: (page) => apiDiscoverTv({
+      page,
+      year: yearSelect.value || undefined,
+      genreId: genreSelect.value || undefined,
+    }),
+    renderItem: (item) => posterCard({
+      mediaType: 'tv',
+      tmdbId: item.id,
+      title: item.title || item.name || '',
+      posterPath: item.poster_path,
+      quickActions: catalogQuickActions('tv', item.id),
+    }),
+  });
+
+  // Reload on filter change
+  yearSelect.addEventListener('change', () => {
+    grid.innerHTML = '';
+    state.catalogTv.scroller.reset();
+    state.catalogTv.scroller.loadMore();
+  });
+  genreSelect.addEventListener('change', () => {
+    grid.innerHTML = '';
+    state.catalogTv.scroller.reset();
+    state.catalogTv.scroller.loadMore();
+  });
+
+  state.catalogTv.scroller.loadMore();
+}
+
+// ------------------------------------------------------- Seguir Viendo ---
+
+async function loadWatching() {
+  const grid = $('#watching-grid');
   renderSkeletons(grid);
   try {
     await ensureLibrary();
-    const rows = state.vistos;
+    const rows = getByStatus('watching');
+    if (!rows.length) {
+      renderEmpty(grid, 'No tenés series en curso. Agregá una desde el catálogo.');
+      return;
+    }
+    grid.innerHTML = rows.map((row) => {
+      const isSeries = row.media_type === 'tv';
+      const progress = isSeries
+        ? `<div class="mt-1 flex items-center justify-between gap-1">
+             <span class="text-[11px] text-slate-300" data-episode-label="${escapeHtml(row.id)}">T${row.current_season ?? 1} · Cap ${row.current_episode ?? 1}</span>
+             <div class="flex gap-1">
+               <button type="button" data-inc-episode="${escapeHtml(row.id)}"
+                 class="rounded-md bg-rose-600 hover:bg-rose-500 transition-colors px-2 py-0.5 text-[11px] font-bold">+1 Cap</button>
+               <button type="button" data-inc-season="${escapeHtml(row.id)}"
+                 class="rounded-md bg-violet-600 hover:bg-violet-500 transition-colors px-2 py-0.5 text-[11px] font-bold">+1 Temp</button>
+             </div>
+           </div>`
+        : '';
+      return posterCard({
+        mediaType: row.media_type,
+        tmdbId: row.id_tmdb,
+        title: row.title,
+        posterPath: row.poster_path,
+        badgeHtml: row.rating ? ratingBadge(row.rating) : '',
+        footerHtml: progress,
+      });
+    }).join('');
+  } catch (err) {
+    renderEmpty(grid, 'No se pudieron cargar las series en curso.');
+  }
+}
+
+// ------------------------------------------------------------- Vistos ---
+
+async function loadCompleted() {
+  const grid = $('#completed-grid');
+  renderSkeletons(grid);
+  try {
+    await ensureLibrary();
+    const rows = getByStatus('completed');
     if (!rows.length) {
       renderEmpty(grid, 'Todavía no marcaron nada como visto.');
       return;
     }
     grid.innerHTML = rows.map((row) => {
-      const tmdbId = Number(row.id.slice(row.media_type.length + 1));
-      const isSeries = row.media_type === 'tv';
-      const progress = isSeries
-        ? `<div class="mt-1 flex items-center justify-between gap-1">
-             <span class="text-[11px] text-slate-300" data-episode-label="${escapeHtml(row.id)}">T${row.current_season ?? 1} · Cap ${row.current_episode ?? 1}</span>
-             <button type="button" data-inc-episode="${escapeHtml(row.id)}"
-               class="rounded-md bg-rose-600 hover:bg-rose-500 transition-colors px-2 py-0.5 text-[11px] font-bold">+1 Cap</button>
-           </div>`
-        : '';
       return posterCard({
         mediaType: row.media_type,
-        tmdbId,
+        tmdbId: row.id_tmdb,
         title: row.title,
         posterPath: row.poster_path,
-        badgeHtml: ratingBadge(row.rating),
-        footerHtml: progress,
+        badgeHtml: row.rating ? ratingBadge(row.rating) : '',
       });
     }).join('');
   } catch (err) {
@@ -215,18 +395,18 @@ async function loadVistos() {
 }
 
 // ------------------------------------------------------------- Watchlist ---
+
 async function loadWatchlist() {
   const grid = $('#watchlist-grid');
   renderSkeletons(grid);
   try {
     await ensureLibrary();
-    const rows = state.watchlist;
+    const rows = getByStatus('watchlist');
     if (!rows.length) {
       renderEmpty(grid, 'La watchlist está vacía.');
       return;
     }
     grid.innerHTML = rows.map((row) => {
-      const tmdbId = Number(row.id.slice(row.media_type.length + 1));
       const footer = `
         <div class="mt-1">
           <button type="button" data-quick-seen="${escapeHtml(row.id)}"
@@ -234,7 +414,7 @@ async function loadWatchlist() {
         </div>`;
       return posterCard({
         mediaType: row.media_type,
-        tmdbId,
+        tmdbId: row.id_tmdb,
         title: row.title,
         posterPath: row.poster_path,
         footerHtml: footer,
@@ -246,23 +426,24 @@ async function loadWatchlist() {
 }
 
 // ---------------------------------------------------------------- Mi Top ---
+
 async function loadMiTop() {
   const grid = $('#mitop-grid');
   renderSkeletons(grid);
   try {
     await ensureLibrary();
-    const rows = state.top;
+    const rows = getTopFavorites();
     if (!rows.length) {
       renderEmpty(grid, 'Todavía no hay joyas en Mi Top.');
       return;
     }
     grid.innerHTML = rows.map((row) => {
-      const tmdbId = Number(row.id.slice(row.media_type.length + 1));
       return posterCard({
         mediaType: row.media_type,
-        tmdbId,
+        tmdbId: row.id_tmdb,
         title: row.title,
         posterPath: row.poster_path,
+        badgeHtml: row.rating ? ratingBadge(row.rating) : '',
       });
     }).join('');
   } catch (err) {
@@ -271,6 +452,7 @@ async function loadMiTop() {
 }
 
 // ---------------------------------------------------------- Recomendados ---
+
 async function loadRecomendados() {
   const grid = $('#recomendados-grid');
   if (state.aiRecommendations) {
@@ -309,11 +491,15 @@ async function handleGenerateAI() {
   grid.innerHTML = '<div class="skeleton col-span-full h-40 rounded-xl"></div>';
   try {
     await ensureLibrary();
-    const topTitles = state.top.map((row) => row.title);
-    const vistosHigh = state.vistos
-      .filter((row) => Number(row.rating) > 8)
-      .map((row) => ({ title: row.title, rating: Number(row.rating) }));
-    const recs = await aiGetRecommendations({ topTitles, vistosHigh });
+    // Get highly-rated titles (8, 9, 10) for the AI prompt
+    const highlyRated = state.library
+      .filter((r) => r.rating && Number(r.rating) >= 8)
+      .map((r) => ({ title: r.title, rating: Number(r.rating) }));
+
+    // Get library IDs to exclude from recommendations
+    const libraryIds = state.library.map((r) => ({ idTmdb: r.id_tmdb, mediaType: r.media_type }));
+
+    const recs = await aiGetRecommendations({ highlyRated, excludeIds: libraryIds });
     state.aiRecommendations = recs;
     renderRecomendados(grid, recs);
   } catch (err) {
@@ -325,9 +511,14 @@ async function handleGenerateAI() {
   }
 }
 
+// ------------------------------------------------------------ Tab router ---
+
 const TAB_LOADERS = {
-  descubrir: loadDescubrir,
-  vistos: loadVistos,
+  inicio: loadInicio,
+  peliculas: loadPeliculas,
+  series: loadSeries,
+  watching: loadWatching,
+  completed: loadCompleted,
   watchlist: loadWatchlist,
   mitop: loadMiTop,
   recomendados: loadRecomendados,
@@ -394,7 +585,7 @@ function renderModalError() {
     <div class="p-10 text-center text-slate-400">No se pudo cargar la información del título.</div>`;
 }
 
-// Render the full modal content from a TMDB details payload.
+// Render the full management modal content from a TMDB details payload.
 function renderModalContent(details, mediaType, opts = {}) {
   const title = detailTitle(details);
   const year = detailYear(details);
@@ -406,9 +597,11 @@ function renderModalContent(details, mediaType, opts = {}) {
   const vote = (Number(details.vote_average) || 0).toFixed(1);
   const rowId = makeRowId(mediaType, details.id);
 
-  const inWatchlist = state.watchlist.some((row) => row.id === rowId);
-  const inTop = state.top.some((row) => row.id === rowId);
-  const vistoRow = state.vistos.find((row) => row.id === rowId);
+  // Find existing library row
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+  const currentStatus = existingRow ? existingRow.status : null;
+  const currentRating = existingRow ? existingRow.rating : null;
+  const isTop = existingRow ? existingRow.is_top_favorite : false;
 
   const backdropBlock = backdropUrl
     ? `<div class="relative h-48 sm:h-64">
@@ -438,49 +631,41 @@ function renderModalContent(details, mediaType, opts = {}) {
   const trailerBlock = trailerUrl
     ? `<a href="${trailerUrl}" target="_blank" rel="noopener noreferrer"
          class="inline-flex items-center gap-1.5 text-sm font-semibold text-rose-400 hover:text-rose-300 transition-colors">
-         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l10.5-6.86a1.04 1.04 0 000-1.76L9.56 4.26A1.04 1.04 0 008 5.14z"/></svg>
-         Ver tráiler</a>`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l10.5-6.86a1.04 1.04 0 000-1.76L9.56 4.26A1.04 1.04 0 008 5.14z"/></svg>
+        Ver tráiler</a>`
     : '';
 
-  const topBtn = inTop
+  // Status selector buttons
+  const statusButtons = ['watchlist', 'watching', 'completed'].map((s) => {
+    const labels = { watchlist: 'Watchlist', watching: 'Sig. Viendo', completed: 'Vistos' };
+    const active = currentStatus === s;
+    const cls = active
+      ? 'bg-rose-600 text-white'
+      : 'bg-slate-700 text-slate-300 hover:bg-slate-600';
+    return `<button type="button" data-action="set-status" data-status="${s}"
+      class="rounded-lg px-3 py-2 text-xs font-bold transition-colors ${cls}">${labels[s]}</button>`;
+  }).join('');
+
+  // Top favorite toggle
+  const topBtn = isTop
     ? { action: 'remove-top', label: '★ Quitar de Mi Top', cls: 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30' }
     : { action: 'add-top', label: '☆ Añadir a Mi Top', cls: 'bg-amber-500 text-slate-900 hover:bg-amber-400' };
 
-  const watchlistBtn = inWatchlist
-    ? { action: 'remove-watchlist', label: 'Quitar de Watchlist', cls: 'bg-slate-700 text-slate-200 hover:bg-slate-600' }
-    : { action: 'add-watchlist', label: 'Añadir a Watchlist', cls: 'bg-slate-700 text-slate-200 hover:bg-slate-600' };
-
-  const isSeries = mediaType === 'tv';
-  const seasonEpisodeInputs = isSeries
-    ? `<div class="flex gap-3">
-         <div class="flex-1">
-           <label class="block text-xs text-slate-400 mb-1" for="seen-season">Temporada</label>
-           <input id="seen-season" type="number" min="1" step="1" value="${vistoRow ? (vistoRow.current_season ?? 1) : 1}"
-             class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
-         </div>
-         <div class="flex-1">
-           <label class="block text-xs text-slate-400 mb-1" for="seen-episode">Episodio</label>
-           <input id="seen-episode" type="number" min="1" step="1" value="${vistoRow ? (vistoRow.current_episode ?? 1) : 1}"
-             class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
-         </div>
-       </div>`
-    : '';
-
-  // Ratings section (only for vistos)
-  const ratingsBlock = vistoRow ? `
+  // Rating section
+  const ratingsBlock = `
     <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
-      <h3 class="text-sm font-bold text-slate-300 mb-2">Nuestras notas</h3>
+      <h3 class="text-sm font-bold text-slate-300 mb-2">Tu nota (1 a 10)</h3>
       <div id="ratings-list" class="flex flex-wrap gap-2 mb-3"></div>
       <div class="flex gap-2">
         <input id="rating-input" type="number" min="1" max="10" step="0.5"
           class="w-24 rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
-          placeholder="1-10">
+          placeholder="1-10" value="${currentRating ? escapeHtml(String(currentRating)) : ''}">
         <button type="button" data-action="submit-rating"
           class="rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors px-4 py-2 text-sm font-bold">Puntuar</button>
       </div>
-    </div>` : '';
+    </div>`;
 
-  // Comments section (any title)
+  // Comments section
   const commentsBlock = `
     <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
       <h3 class="text-sm font-bold text-slate-300 mb-2">Comentarios</h3>
@@ -494,8 +679,8 @@ function renderModalContent(details, mediaType, opts = {}) {
       </div>
     </div>`;
 
-  // Tags section (vistos and watchlist)
-  const tagsBlock = (vistoRow || inWatchlist) ? `
+  // Tags section
+  const tagsBlock = existingRow ? `
     <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
       <h3 class="text-sm font-bold text-slate-300 mb-2">Etiquetas</h3>
       <div id="tags-list" class="flex flex-wrap gap-1.5 mb-3"></div>
@@ -506,6 +691,36 @@ function renderModalContent(details, mediaType, opts = {}) {
         <button type="button" data-action="add-tag"
           class="rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors px-4 py-2 text-sm font-bold">Añadir</button>
       </div>
+    </div>` : '';
+
+  // Season/episode for series
+  const isSeries = mediaType === 'tv';
+  const seasonEpisodeBlock = isSeries && existingRow ? `
+    <div class="mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4">
+      <h3 class="text-sm font-bold text-slate-300 mb-2">Progreso de la serie</h3>
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label class="block text-xs text-slate-400 mb-1" for="modal-season">Temporada</label>
+          <input id="modal-season" type="number" min="1" step="1" value="${existingRow.current_season ?? 1}"
+            class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+        </div>
+        <div class="flex-1">
+          <label class="block text-xs text-slate-400 mb-1" for="modal-episode">Episodio</label>
+          <input id="modal-episode" type="number" min="1" step="1" value="${existingRow.current_episode ?? 1}"
+            class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+        </div>
+      </div>
+      <button type="button" data-action="save-progress"
+        class="mt-3 w-full rounded-lg bg-violet-600 hover:bg-violet-500 transition-colors font-bold py-2 text-sm">Guardar progreso</button>
+    </div>` : '';
+
+  // Delete button
+  const deleteBlock = existingRow ? `
+    <div class="mt-4 pt-4 border-t border-slate-700">
+      <button type="button" data-action="delete-media"
+        class="w-full rounded-lg bg-rose-900/50 hover:bg-rose-900 text-rose-300 border border-rose-800 transition-colors font-bold py-2.5 text-sm">
+        🗑 Eliminar de la biblioteca
+      </button>
     </div>` : '';
 
   $('#modal-body').innerHTML = `
@@ -529,37 +744,23 @@ function renderModalContent(details, mediaType, opts = {}) {
 
       ${castBlock}
 
-      <div class="flex flex-wrap gap-2 mt-6">
+      <div class="mt-6 space-y-3">
+        <h3 class="text-sm font-bold text-slate-300">Estado en tu biblioteca</h3>
+        <div class="flex flex-wrap gap-2">
+          ${statusButtons}
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mt-4">
         <button type="button" data-action="${topBtn.action}"
           class="rounded-lg px-4 py-2 text-sm font-bold transition-colors ${topBtn.cls}">${topBtn.label}</button>
-        <button type="button" data-action="${watchlistBtn.action}"
-          class="rounded-lg px-4 py-2 text-sm font-bold transition-colors ${watchlistBtn.cls}">${watchlistBtn.label}</button>
-        <button type="button" data-action="toggle-seen-form"
-          class="rounded-lg px-4 py-2 text-sm font-bold bg-rose-600 hover:bg-rose-500 transition-colors">Marcar como Vista</button>
       </div>
 
       ${ratingsBlock}
+      ${seasonEpisodeBlock}
       ${commentsBlock}
       ${tagsBlock}
-
-      <form id="seen-form" class="${opts.expandRating ? '' : 'hidden'} mt-4 rounded-xl bg-slate-800/60 border border-slate-700 p-4 space-y-3">
-        <div>
-          <label class="block text-xs text-slate-400 mb-1" for="seen-rating">Tu nota (1 a 10)</label>
-          <input id="seen-rating" type="number" min="1" max="10" step="0.5" required
-            value="${vistoRow && vistoRow.rating != null ? escapeHtml(String(vistoRow.rating)) : ''}"
-            class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
-            placeholder="Ej: 8.5">
-        </div>
-        <div>
-          <label class="block text-xs text-slate-400 mb-1" for="seen-review">Reseña (opcional)</label>
-          <textarea id="seen-review" rows="3"
-            class="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
-            placeholder="¿Qué les pareció?">${vistoRow && vistoRow.review ? escapeHtml(vistoRow.review) : ''}</textarea>
-        </div>
-        ${seasonEpisodeInputs}
-        <button type="submit"
-          class="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 transition-colors font-bold py-2.5 text-sm">Guardar en Vistos</button>
-      </form>
+      ${deleteBlock}
     </div>`;
 
   modalContext = { details, mediaType, opts };
@@ -586,26 +787,20 @@ async function loadModalExtras(rowId, mediaType, tmdbId) {
     const comments = await dbGetComments(rowId);
     renderComments(comments);
   } catch (err) {
-    // Non-critical: comments are best-effort
+    // Non-critical
   }
 
-  // Ratings (only for vistos)
-  const vistoRow = state.vistos.find((r) => r.id === rowId);
-  if (vistoRow) {
+  // Ratings
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+  if (existingRow) {
     try {
       const ratings = await dbGetRatings(rowId);
       renderRatings(ratings);
     } catch (err) {
       // Non-critical
     }
-  }
-
-  // Tags (vistos and watchlist)
-  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
-  if (vistoRow || inWatchlist) {
-    const table = vistoRow ? 'vistos' : 'watchlist';
-    const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
-    renderTags(row.tags || []);
+    // Tags
+    renderTags(existingRow.tags || []);
   }
 }
 
@@ -653,15 +848,6 @@ function renderTags(tags) {
 
 // ----------------------------------------------------- modal action wiring ---
 
-function buildLibraryRow(details, mediaType) {
-  return {
-    id: makeRowId(mediaType, details.id),
-    media_type: mediaType,
-    title: detailTitle(details),
-    poster_path: details.poster_path || '',
-  };
-}
-
 async function refreshModalAfterMutation() {
   if (!modalContext) return;
   renderModalContent(modalContext.details, modalContext.mediaType, modalContext.opts);
@@ -671,27 +857,52 @@ async function refreshModalAfterMutation() {
 async function handleModalAction(action, event) {
   if (!modalContext) return;
   const { details, mediaType } = modalContext;
-  const row = buildLibraryRow(details, mediaType);
+  const rowId = makeRowId(mediaType, details.id);
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+
   try {
-    if (action === 'add-top') {
-      await dbAddToTop(row);
-      state.top = [row, ...state.top.filter((r) => r.id !== row.id)];
+    if (action === 'set-status') {
+      const newStatus = event.target.dataset.status;
+      if (existingRow) {
+        await dbChangeStatus(rowId, newStatus);
+        existingRow.status = newStatus;
+      } else {
+        // Create new row with this status
+        await dbUpsertUserMedia({
+          id: rowId,
+          id_tmdb: details.id,
+          media_type: mediaType,
+          title: detailTitle(details),
+          poster_path: details.poster_path || '',
+          status: newStatus,
+          genre_ids: (details.genres || []).map((g) => g.id),
+          runtime: details.runtime || (details.episode_run_time && details.episode_run_time[0]) || null,
+        });
+        await loadLibrary();
+      }
+      showToast(`Movido a ${newStatus === 'watchlist' ? 'Watchlist' : newStatus === 'watching' ? 'Seguir Viendo' : 'Vistos'}`);
+    } else if (action === 'add-top') {
+      if (existingRow) {
+        await dbUpdateUserMedia(rowId, { is_top_favorite: true });
+        existingRow.is_top_favorite = true;
+      } else {
+        await dbUpsertUserMedia({
+          id: rowId,
+          id_tmdb: details.id,
+          media_type: mediaType,
+          title: detailTitle(details),
+          poster_path: details.poster_path || '',
+          status: 'watchlist',
+          is_top_favorite: true,
+          genre_ids: (details.genres || []).map((g) => g.id),
+        });
+        await loadLibrary();
+      }
       showToast('Añadido a Mi Top');
     } else if (action === 'remove-top') {
-      await dbRemoveFromTop(row.id);
-      state.top = state.top.filter((r) => r.id !== row.id);
+      await dbUpdateUserMedia(rowId, { is_top_favorite: false });
+      if (existingRow) existingRow.is_top_favorite = false;
       showToast('Quitado de Mi Top');
-    } else if (action === 'add-watchlist') {
-      await dbAddToWatchlist(row);
-      state.watchlist = [row, ...state.watchlist.filter((r) => r.id !== row.id)];
-      showToast('Añadido a la Watchlist');
-    } else if (action === 'remove-watchlist') {
-      await dbRemoveFromWatchlist(row.id);
-      state.watchlist = state.watchlist.filter((r) => r.id !== row.id);
-      showToast('Quitado de la Watchlist');
-    } else if (action === 'toggle-seen-form') {
-      $('#seen-form').classList.toggle('hidden');
-      return;
     } else if (action === 'submit-rating') {
       await handleSubmitRating();
       return;
@@ -704,6 +915,22 @@ async function handleModalAction(action, event) {
     } else if (action === 'remove-tag') {
       const btn = event.target.closest('[data-action="remove-tag"]');
       await handleRemoveTag(btn);
+      return;
+    } else if (action === 'save-progress') {
+      const season = Math.max(1, parseInt($('#modal-season')?.value, 10) || 1);
+      const episode = Math.max(1, parseInt($('#modal-episode')?.value, 10) || 1);
+      await dbUpdateUserMedia(rowId, { current_season: season, current_episode: episode });
+      if (existingRow) {
+        existingRow.current_season = season;
+        existingRow.current_episode = episode;
+      }
+      showToast('Progreso guardado');
+    } else if (action === 'delete-media') {
+      await dbDeleteUserMedia(rowId);
+      state.library = state.library.filter((r) => r.id !== rowId);
+      showToast('Eliminado de la biblioteca');
+      closeModal();
+      TAB_LOADERS[state.activeTab]();
       return;
     }
     await refreshModalAfterMutation();
@@ -722,6 +949,10 @@ async function handleSubmitRating() {
   }
   const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
   await dbUpsertRating(rowId, rating);
+  // Also update the user_media rating column
+  await dbUpdateUserMedia(rowId, { rating });
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+  if (existingRow) existingRow.rating = rating;
   showToast('¡Nota guardada!');
   const ratings = await dbGetRatings(rowId);
   renderRatings(ratings);
@@ -746,15 +977,13 @@ async function handleAddTag() {
   const tag = input.value.trim();
   if (!tag) return;
   const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
-  const vistoRow = state.vistos.find((r) => r.id === rowId);
-  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
-  const table = vistoRow ? 'vistos' : 'watchlist';
-  const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
-  const tags = row.tags || [];
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+  if (!existingRow) return;
+  const tags = existingRow.tags || [];
   if (!tags.includes(tag)) {
     tags.push(tag);
-    await dbUpdateTags(table, rowId, tags);
-    row.tags = tags;
+    await dbUpdateTags(rowId, tags);
+    existingRow.tags = tags;
   }
   input.value = '';
   renderTags(tags);
@@ -765,50 +994,13 @@ async function handleRemoveTag(btn) {
   if (!btn) return;
   const index = Number(btn.dataset.tagIndex);
   const rowId = makeRowId(modalContext.mediaType, modalContext.details.id);
-  const vistoRow = state.vistos.find((r) => r.id === rowId);
-  const inWatchlist = state.watchlist.some((r) => r.id === rowId);
-  const table = vistoRow ? 'vistos' : 'watchlist';
-  const row = vistoRow || state.watchlist.find((r) => r.id === rowId);
-  const tags = row.tags || [];
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+  if (!existingRow) return;
+  const tags = existingRow.tags || [];
   tags.splice(index, 1);
-  await dbUpdateTags(table, rowId, tags);
-  row.tags = tags;
+  await dbUpdateTags(rowId, tags);
+  existingRow.tags = tags;
   renderTags(tags);
-}
-
-async function handleSeenSubmit(event) {
-  event.preventDefault();
-  if (!modalContext) return;
-  const { details, mediaType } = modalContext;
-  const rating = Number($('#seen-rating').value);
-  if (!Number.isFinite(rating) || rating < 1 || rating > 10) {
-    showToast('La nota tiene que estar entre 1 y 10.', 'error');
-    return;
-  }
-
-  const row = {
-    ...buildLibraryRow(details, mediaType),
-    rating,
-    review: $('#seen-review').value.trim() || null,
-  };
-  if (mediaType === 'tv') {
-    row.current_season = Math.max(1, parseInt($('#seen-season').value, 10) || 1);
-    row.current_episode = Math.max(1, parseInt($('#seen-episode').value, 10) || 1);
-  }
-
-  try {
-    await dbUpsertVisto(row);
-    state.vistos = [row, ...state.vistos.filter((r) => r.id !== row.id)];
-    if (state.watchlist.some((r) => r.id === row.id)) {
-      await dbRemoveFromWatchlist(row.id);
-      state.watchlist = state.watchlist.filter((r) => r.id !== row.id);
-    }
-    showToast('¡Guardado en Vistos!');
-    closeModal();
-    TAB_LOADERS[state.activeTab]();
-  } catch (err) {
-    showToast('No se pudo guardar en Vistos.', 'error');
-  }
 }
 
 // ================================================================== SEARCH ==
@@ -892,7 +1084,7 @@ function bindSearch() {
 // ============================================================ QUICK ACTIONS =
 
 async function handleIncrementEpisode(rowId, button) {
-  const row = state.vistos.find((r) => r.id === rowId);
+  const row = state.library ? state.library.find((r) => r.id === rowId) : null;
   if (!row) return;
   const previous = Number(row.current_episode) || 1;
   row.current_episode = previous + 1;
@@ -902,7 +1094,7 @@ async function handleIncrementEpisode(rowId, button) {
   button.disabled = true;
 
   try {
-    await dbUpdateEpisode(rowId, row.current_episode);
+    await dbIncrementEpisode(rowId);
   } catch (err) {
     row.current_episode = previous;
     if (label) label.textContent = `T${row.current_season ?? 1} · Cap ${previous}`;
@@ -912,15 +1104,117 @@ async function handleIncrementEpisode(rowId, button) {
   }
 }
 
+async function handleIncrementSeason(rowId, button) {
+  const row = state.library ? state.library.find((r) => r.id === rowId) : null;
+  if (!row) return;
+  const previous = Number(row.current_season) || 1;
+  row.current_season = previous + 1;
+  row.current_episode = 1;
+
+  const label = document.querySelector(`[data-episode-label="${CSS.escape(rowId)}"]`);
+  if (label) label.textContent = `T${row.current_season} · Cap 1`;
+  button.disabled = true;
+
+  try {
+    await dbIncrementSeason(rowId);
+  } catch (err) {
+    row.current_season = previous;
+    row.current_episode = 1;
+    if (label) label.textContent = `T${previous} · Cap 1`;
+    showToast('No se pudo actualizar la temporada.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function handleCatalogQuickAction(action, mediaType, tmdbId) {
+  const rowId = makeRowId(mediaType, tmdbId);
+  const existingRow = state.library ? state.library.find((r) => r.id === rowId) : null;
+
+  try {
+    if (action === 'seen') {
+      if (existingRow) {
+        await dbChangeStatus(rowId, 'completed');
+        existingRow.status = 'completed';
+      } else {
+        // Fetch details for the new row
+        const details = await matchGetDetails(mediaType, tmdbId);
+        await dbUpsertUserMedia({
+          id: rowId,
+          id_tmdb: tmdbId,
+          media_type: mediaType,
+          title: detailTitle(details),
+          poster_path: details.poster_path || '',
+          status: 'completed',
+          genre_ids: (details.genres || []).map((g) => g.id),
+          runtime: details.runtime || (details.episode_run_time && details.episode_run_time[0]) || null,
+        });
+        await loadLibrary();
+      }
+      showToast('Marcado como visto');
+    } else if (action === 'watchlist') {
+      if (existingRow) {
+        await dbChangeStatus(rowId, 'watchlist');
+        existingRow.status = 'watchlist';
+      } else {
+        const details = await matchGetDetails(mediaType, tmdbId);
+        await dbUpsertUserMedia({
+          id: rowId,
+          id_tmdb: tmdbId,
+          media_type: mediaType,
+          title: detailTitle(details),
+          poster_path: details.poster_path || '',
+          status: 'watchlist',
+          genre_ids: (details.genres || []).map((g) => g.id),
+        });
+        await loadLibrary();
+      }
+      showToast('Añadido a Watchlist');
+    } else if (action === 'top') {
+      if (existingRow) {
+        await dbUpdateUserMedia(rowId, { is_top_favorite: true });
+        existingRow.is_top_favorite = true;
+      } else {
+        const details = await matchGetDetails(mediaType, tmdbId);
+        await dbUpsertUserMedia({
+          id: rowId,
+          id_tmdb: tmdbId,
+          media_type: mediaType,
+          title: detailTitle(details),
+          poster_path: details.poster_path || '',
+          status: 'watchlist',
+          is_top_favorite: true,
+          genre_ids: (details.genres || []).map((g) => g.id),
+        });
+        await loadLibrary();
+      }
+      showToast('Añadido a Mi Top');
+    }
+    // Refresh current tab
+    TAB_LOADERS[state.activeTab]();
+  } catch (err) {
+    showToast('No se pudo completar la acción.', 'error');
+  }
+}
+
 function bindGridActions() {
   const grids = [
     '#row-tendencias', '#row-populares-ar', '#row-proximos-estrenos',
     '#row-accion', '#row-comedias',
-    '#vistos-grid', '#watchlist-grid', '#mitop-grid', '#recomendados-grid',
+    '#catalog-movies-grid', '#catalog-tv-grid',
+    '#watching-grid', '#completed-grid', '#watchlist-grid', '#mitop-grid', '#recomendados-grid',
   ];
 
   for (const selector of grids) {
     $(selector).addEventListener('click', (event) => {
+      // Catalog quick actions
+      const quickBtn = event.target.closest('[data-quick]');
+      if (quickBtn) {
+        event.stopPropagation();
+        handleCatalogQuickAction(quickBtn.dataset.quick, quickBtn.dataset.mediaType, Number(quickBtn.dataset.tmdbId));
+        return;
+      }
+
       const incButton = event.target.closest('[data-inc-episode]');
       if (incButton) {
         event.stopPropagation();
@@ -928,11 +1222,18 @@ function bindGridActions() {
         return;
       }
 
+      const incSeasonBtn = event.target.closest('[data-inc-season]');
+      if (incSeasonBtn) {
+        event.stopPropagation();
+        handleIncrementSeason(incSeasonBtn.dataset.incSeason, incSeasonBtn);
+        return;
+      }
+
       const quickSeen = event.target.closest('[data-quick-seen]');
       if (quickSeen) {
         event.stopPropagation();
         const card = quickSeen.closest('[data-tmdb-id]');
-        openDetail(card.dataset.mediaType, Number(card.dataset.tmdbId), { expandRating: true });
+        openDetail(card.dataset.mediaType, Number(card.dataset.tmdbId));
         return;
       }
 
@@ -1057,13 +1358,13 @@ function showRouletteFilter() {
 }
 
 async function pickRoulette(filters) {
-  const seenIds = new Set(state.vistos.map((row) => row.id));
+  const seenIds = new Set(state.library ? state.library.map((r) => r.id) : []);
   const pool = [];
 
   // Watchlist items
-  for (const row of state.watchlist) {
-    const tmdbId = Number(row.id.slice(row.media_type.length + 1));
-    pool.push({ mediaType: row.media_type, tmdbId, genreIds: row.genre_ids || [], runtime: row.runtime || null });
+  const watchlist = getByStatus('watchlist');
+  for (const row of watchlist) {
+    pool.push({ mediaType: row.media_type, tmdbId: row.id_tmdb, genreIds: row.genre_ids || [], runtime: row.runtime || null });
   }
 
   // Trending fallback
@@ -1078,7 +1379,7 @@ async function pickRoulette(filters) {
     // Trending failing is not critical
   }
 
-  // Dedupe and exclude vistos
+  // Dedupe and exclude already in library
   const seen = new Set();
   const candidates = pool.filter((c) => {
     const key = makeRowId(c.mediaType, c.tmdbId);
@@ -1097,7 +1398,6 @@ async function pickRoulette(filters) {
     filtered = filtered.filter((c) => c.genreIds.includes(genreId));
   }
   if (filters.maxDuration) {
-    // Fetch details for items missing runtime to apply duration filter
     const withRuntime = await Promise.all(filtered.map(async (c) => {
       if (c.runtime) return c;
       try {
@@ -1119,18 +1419,19 @@ async function pickRoulette(filters) {
 async function handleStats() {
   try {
     await ensureLibrary();
-    const totalVistos = state.vistos.length;
-    const movies = state.vistos.filter((r) => r.media_type === 'movie').length;
-    const series = state.vistos.filter((r) => r.media_type === 'tv').length;
+    const totalCompleted = getByStatus('completed').length;
+    const totalWatching = getByStatus('watching').length;
+    const totalWatchlist = getByStatus('watchlist').length;
+    const movies = state.library.filter((r) => r.media_type === 'movie').length;
+    const series = state.library.filter((r) => r.media_type === 'tv').length;
 
     // Estimated watch time
     let totalMinutes = 0;
     const genreCounts = {};
 
-    await Promise.all(state.vistos.map(async (row) => {
-      const tmdbId = Number(row.id.slice(row.media_type.length + 1));
+    await Promise.all(state.library.map(async (row) => {
       try {
-        const details = await matchGetDetails(row.media_type, tmdbId);
+        const details = await matchGetDetails(row.media_type, row.id_tmdb);
         if (row.media_type === 'movie') {
           totalMinutes += details.runtime || 0;
         } else {
@@ -1169,7 +1470,7 @@ async function handleStats() {
             <h2 class="text-xl font-extrabold mb-4">📊 Tus estadísticas</h2>
             <div class="grid grid-cols-2 gap-3 mb-4">
               <div class="stat-card">
-                <p class="text-2xl font-extrabold text-rose-400">${totalVistos}</p>
+                <p class="text-2xl font-extrabold text-rose-400">${totalCompleted}</p>
                 <p class="text-xs text-slate-400 mt-1">Títulos vistos</p>
               </div>
               <div class="stat-card">
@@ -1183,6 +1484,14 @@ async function handleStats() {
               <div class="stat-card">
                 <p class="text-2xl font-extrabold text-rose-400">${series}</p>
                 <p class="text-xs text-slate-400 mt-1">Series</p>
+              </div>
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${totalWatching}</p>
+                <p class="text-xs text-slate-400 mt-1">Siguiendo</p>
+              </div>
+              <div class="stat-card">
+                <p class="text-2xl font-extrabold text-rose-400">${totalWatchlist}</p>
+                <p class="text-xs text-slate-400 mt-1">Pendientes</p>
               </div>
             </div>
             ${topGenres.length ? `
@@ -1215,7 +1524,7 @@ function showLogin() {
 function showApp() {
   $('#login-view').classList.add('hidden');
   $('#app-shell').classList.remove('hidden');
-  activateTab('descubrir');
+  activateTab('inicio');
 }
 
 function bindAuth() {
@@ -1279,12 +1588,6 @@ function bindModal() {
     const actionBtn = event.target.closest('[data-action]');
     if (actionBtn) {
       handleModalAction(actionBtn.dataset.action, event);
-    }
-  });
-
-  $('#modal-root').addEventListener('submit', (event) => {
-    if (event.target.id === 'seen-form') {
-      handleSeenSubmit(event);
     }
   });
 

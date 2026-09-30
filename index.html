@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Pelisme</title>
+  <title>Pelisme v3.0</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0f172a">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
@@ -15,6 +15,8 @@
   <script src="js/config.js"></script>
   <script src="js/tmdb.js"></script>
   <script src="js/supabaseClient.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/api.js"></script>
   <script src="js/ai.js"></script>
   <script src="js/match.js"></script>
 </head>
@@ -50,7 +52,7 @@
 
     <header class="sticky top-0 z-30 bg-[#0f172a]/90 backdrop-blur border-b border-slate-800">
       <div class="max-w-5xl mx-auto flex items-center justify-between px-4 h-14">
-        <span class="text-xl font-extrabold tracking-tight">Peli<span class="text-rose-500">sme</span></span>
+        <span class="text-xl font-extrabold tracking-tight">Peli<span class="text-rose-500">sme</span> <span class="text-xs text-slate-500 font-normal">v3.0</span></span>
         <div class="flex items-center gap-1">
           <button id="stats-btn" title="Estadísticas" aria-label="Estadísticas"
             class="p-2 rounded-full text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors">
@@ -68,8 +70,8 @@
 
     <main id="main-content" class="main-content max-w-5xl mx-auto px-4 pt-5">
 
-      <!-- ====================================================== Descubrir -->
-      <section id="tab-descubrir" class="tab-section">
+      <!-- ====================================================== Inicio -->
+      <section id="tab-inicio" class="tab-section">
         <div class="relative mb-6" id="search-wrapper">
           <input id="search-input" type="search" autocomplete="off"
             class="w-full rounded-xl bg-slate-900 border border-slate-700 px-4 py-3 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-600 focus:border-transparent"
@@ -99,13 +101,53 @@
         </button>
       </section>
 
-      <!-- ========================================================= Vistos -->
-      <section id="tab-vistos" class="tab-section hidden">
-        <h2 class="text-lg font-bold mb-3 text-slate-200">Lo que ya vimos</h2>
-        <div id="vistos-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+      <!-- ================================================== Catálogo Películas -->
+      <section id="tab-peliculas" class="tab-section hidden">
+        <div class="flex items-center justify-between mb-4 gap-3">
+          <h2 class="text-lg font-bold text-slate-200">Catálogo de Películas</h2>
+          <div class="flex gap-2">
+            <select id="filter-year-movies" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+              <option value="">Todos los años</option>
+            </select>
+            <select id="filter-genre-movies" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+              <option value="">Todos los géneros</option>
+            </select>
+          </div>
+        </div>
+        <div id="catalog-movies-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
       </section>
 
-      <!-- ====================================================== Watchlist -->
+      <!-- ==================================================== Catálogo Series -->
+      <section id="tab-series" class="tab-section hidden">
+        <div class="flex items-center justify-between mb-4 gap-3">
+          <h2 class="text-lg font-bold text-slate-200">Catálogo de Series</h2>
+          <div class="flex gap-2">
+            <select id="filter-year-tv" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+              <option value="">Todos los años</option>
+            </select>
+            <select id="filter-genre-tv" class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rose-600">
+              <option value="">Todos los géneros</option>
+            </select>
+          </div>
+        </div>
+        <div id="catalog-tv-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+      </section>
+
+      <!-- ================================================== Seguir Viendo -->
+      <section id="tab-watching" class="tab-section hidden">
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Seguir Viendo</h2>
+        <p class="text-sm text-slate-400 mb-4">Series en curso. La nota es global a toda la serie.</p>
+        <div id="watching-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+      </section>
+
+      <!-- ======================================================== Vistos -->
+      <section id="tab-completed" class="tab-section hidden">
+        <h2 class="text-lg font-bold mb-3 text-slate-200">Vistos</h2>
+        <p class="text-sm text-slate-400 mb-4">Películas completas y series terminadas al 100%.</p>
+        <div id="completed-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+      </section>
+
+      <!-- ======================================================= Watchlist -->
       <section id="tab-watchlist" class="tab-section hidden">
         <h2 class="text-lg font-bold mb-3 text-slate-200">Pendientes</h2>
         <div id="watchlist-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
@@ -132,34 +174,52 @@
 
     <!-- ======================================================== bottom nav -->
     <nav class="bottom-nav fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800">
-      <div class="max-w-5xl mx-auto grid grid-cols-5 h-16">
-        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors" data-tab="descubrir">
+      <div class="nav-scroll flex overflow-x-auto h-16 px-2 gap-1">
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="inicio">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18z" />
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.5 8.5l-2 5-5 2 2-5 5-2z" />
           </svg>
-          <span>Descubrir</span>
+          <span>Inicio</span>
         </button>
-        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors" data-tab="vistos">
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="peliculas">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c.621 0 1.125.504 1.125 1.125M12 10.875c-.621 0-1.125.504-1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m-2.25 0c-.621 0-1.125.504-1.125 1.125m6.75 0h-2.25m2.25 0c.621 0 1.125.504 1.125 1.125" />
+          </svg>
+          <span>Películas</span>
+        </button>
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="series">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 20.25h12m-7.5-3v3m3-3v3m-10.125-3h17.25c.621 0 1.125-.504 1.125-1.125V4.875c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125z" />
+          </svg>
+          <span>Series</span>
+        </button>
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="watching">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+          </svg>
+          <span>Sig. Viendo</span>
+        </button>
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="completed">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
             <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
           <span>Vistos</span>
         </button>
-        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors" data-tab="watchlist">
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="watchlist">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
             <path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
           </svg>
           <span>Watchlist</span>
         </button>
-        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors" data-tab="mitop">
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="mitop">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
             <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
           </svg>
           <span>Mi Top</span>
         </button>
-        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors" data-tab="recomendados">
+        <button class="nav-btn flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors shrink-0 px-3" data-tab="recomendados">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" class="w-6 h-6">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
           </svg>
